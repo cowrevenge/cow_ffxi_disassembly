@@ -199,13 +199,29 @@ Ctor facts (`0x5FA20..0x5FAD9`, **verified**):
 - `fild dword …` of an integer argument, stored to `[task+0x74]` and `[task+0x78]` (matches the
   update's countdown use: `+0x74` ticked against clock dt, per §4).
 
-**Unresolved — stated plainly, do not quote:** I attempted the mechanical arg-slot → field mapping
-(push order at `0x5B41D..0x5B432`, `ret 0x1C`) and got **inconsistent results**: a slot that must hold
-a float (it is loaded with `fld` then × π/180) lands where the handler pushed a zero-extended byte, so
-either my push-order reading or the callee-frame shift assumption is wrong. The arg↔field correspondence
-(+0x7c's exact role too — used as both a null-test target and in an equality chain by the update loop)
-must be re-derived before any kuluu code depends on it. Cheapest fixes: machine-simulate the handler's
-stack, or get member names from PS2 DWARF / DancingMad's reconstruction instead of offsets.
+**Arg-slot mapping — mostly resolved; one slot unexplained [V/I].** Frame arithmetic rule (I got this
+wrong on the first pass and corrected it): args sit at `entry esp + 4, +8, …`; inside the body, after
+the ctor's own four pushes (`push ebx/esi/edi` + `push eax` = 0x10 bytes), an arg at entry offset *A* is
+read at **body `esp + A + 0x10`**.
+
+| entry slot | handler source | read in body at | lands in |
+|---|---|---|---|
+| +0x4 | `esi` (scheduler/script ctx) | `mov eax,[esp+4]`; `mov edi,[esp+0x14]` | passed to base ctor; also used as the object of virtual `[vfx+0x1C0]` |
+| +0x8 | result of `lookup_62770(ctx)` | `mov ecx,[esp+0x18]` | **`[task+0x7c]`** — consistent with the update loop's null-test on that field ✔ |
+| +0xC | `(int)byte[record+0x14]` | — (not located) | **unexplained** |
+| +0x10 / +0x14 / +0x18 | `record[+8] / [+C] / [+0x10]` | one is read with `fild` (`dword`→integer) for `[+0x74]/[+0x78]` | start/duration-ish fields |
+| +0x1C | `_ftoll(authored word × [ctx+0x9c])` | — (not located) | **unexplained** |
+
+The three values converted by π/180 are read in the body as `fld dword [esp+0x1C]` (twice → `[+0x90]`,
+`[+0x94]`) and `fld dword [esp+0x20]` (→ `[+0x98]`). Under the frame rule those correspond to entry
+slots **+0xC** and **+0x10**. +0x10 is a record field (fine, float), but **+0xC is the zero-extended byte
+from `record[+0x14]`**, which cannot legitimately be loaded as a float. So **exactly one mapping is
+still wrong somewhere** — likely my assumption that every push at 0x5B41D..0x5B429 belongs to this ctor,
+or that the byte at `record+0x14` is really a byte field (it may be two bytes: mode + something, or the
+pushed register is not what I paired it with). **Do not use arg-slot identities in kuluu code until that
+single inconsistency is closed.** Cheapest closers: simulate the handler's stack mechanically against the
+task fields after construction (live debug), or read member names from PS2 DWARF / DancingMad's
+reconstruction instead of inferring offsets.
 
 ## 6. What this pass still does NOT know [O]
 
