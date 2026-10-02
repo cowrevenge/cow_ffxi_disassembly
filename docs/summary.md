@@ -283,9 +283,13 @@ bone matrices -> render
 ran past the end into default-handler pointers). Shipped DATs corroborate the two record contracts —
 504 × `0x89` LockLookAt records whose bytes after `record+8` are all zero (duration-only), and 5 × `0xA9`
 ActorRotation records with yaw ∈ {+90,−90,−135,+45} — while the `0xAA` variant never appears here.
-Two authored-float carriers are still unread as records: stage **`0x28` (case 38)**, int + float
-{30,24,20,10,60,36,15}, in 5,259 files, and **`0x62` (case 96)**, always `(u16,u16)+45.0f`. Read those two
-handlers consumer-side; do not infer meaning from a census again.
+The reader itself was then fixed (payloads uncapped; `--all-types` no longer crashes — full install scan in ~28 s),
+which roughly doubled the angle counts and exposed the real carrier ranking ([drivetask.md](drivetask.md) §9.5b,
+§11): **`0x28`/case 38**, **`0x62`/case 96** (clean tiny layouts — read these two handlers first), then the
+long-payload family `0x2C`/case 42, `0x25`/case 35, `unk21`/case 31. ActorRotation's mode byte (`record+0x14`) is
+**0 in all five shipped records**, and stage `0xAA` remains absent. Wider chunk coverage was measured and is
+useless — non-`0x07` bodies parse as fake streams with absurd record lengths, so **censuses must be filtered by
+chunk type**. Read handlers consumer-side; do not infer meaning from a census again.
 
 **Then kuluu (separate task, kuluu repo, user's git rules):**
 - S1 strafe/legs facing (parked force-toward-target fix) and S2 idle<->walk pop (clip continues

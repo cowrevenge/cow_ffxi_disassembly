@@ -399,16 +399,21 @@ the bytes we guessed.
 
 ### 9.4 Blind spots of this pass — state them, don't paper over them
 
-1. **Payload truncation.** `describe_stage` prints only `raw[4:20]`, i.e. the first four payload dwords.
-   **26,131 of 450,253** stage lines (5.8%) have unseen tails — including *all* `0xA9` records' last dword
-   and every `0x25/0x0B/unk21/0x2C/0x3F/0x53/0x60/0x04` long record. A float **triple** could hide there.
-   Within the printed window, no stage type shows three consecutive floats **[V]**.
-2. **Chunk coverage.** Only chunk type `0x07` is parsed as a stream (by design — motion/mesh chunks parse
-   by accident and polluted an earlier census). Unexamined: 202,927 × `0x05` generator, 196,749 × `0x19`,
-   103,951 × `0x2B` motion clips, 85,668 × `0x20` skeleton… Broadening with `--all-types` **crashes** the
-   kuluu tool (`describe_stage` reads `st['timing']` unconditionally for type `0x02`, but that key exists
-   only when stage length ≥ 3 → `KeyError: 'timing'`). Not fixed here: no kuluu edits this pass. It is a real
-   one-line bug in vendor code and worth its own change request.
+1. **Payload truncation — RETIRED (§11).** `describe_stage` used to print only `raw[4:20]`, hiding the tails of
+   **26,131 of 450,253** stage lines (5.8%), including ActorRotation's mode byte at `record+0x14`. Re-dumped with
+   full payloads **[V]**: every angle count in §9.2 roughly doubles (chunk-`0x07`, e.g. `30.0f` 1,514 → **2,050**,
+   `45.0f` 216 → **250**, `+90.0f` 1 → **16**), and it exposes long-payload types the capped view never saw —
+   chiefly stage **`0x2C` (case 42)**: 2,456 records with payloads up to 21 dwords, values clustering at
+   `20.0f` ×1,794 plus `60/10/30/90`. Note what this *does not* buy us: literal float equality on an undecoded
+   payload is weak evidence — a `20.0f` may be a count or a distance. Only the consumer read assigns meaning,
+   which is why §10.3 ranks those handler reads above any further census.
+2. **Chunk coverage — measured, and the answer is "there is nothing there" (§11).** Broadening to all chunk
+   types used to crash the reader (fixed since). Doing it now yields 2,348 extra "routines" in chunks `0x2B`
+   motion clips (1,677), `0x05` generators (456), `0x1F` (84), `0x2A/0x3D/0x2C` — and those streams declare
+   absurd stage lengths (up to **191** dwords) ⇒ they are **not scheduler streams**, just plausible parses of
+   mesh/motion bodies. Chunk-`0x07` counts are byte-for-byte unchanged by any of this, so every number in §9
+   stands. Lesson recorded in the tool: a census must be filtered by routine chunk type; unfiltered it
+   invents records (e.g. a "`0x87` ×2" that only exists inside noise).
 3. **Identity still unproven.** case-index ↔ stage-type-byte remains inferred (nearest preceding jump-table
    target), so the `A8`/`A9` adjacency above could be a ±1 attribution error. One bounded lookup settles it:
    read jump table `.rdata 0x5DC1C` entry for the handler containing `0x5B3DF` and confirm its index, then
@@ -423,6 +428,22 @@ Two claims here were later closed or re-ranked, and §9 should be read with that
 `0xA9` *is* ActorRotation — see §10), and this census is **navigation and corroboration only**: a data
 survey cannot define a record's meaning, the consumer code can ([summary.md](summary.md) §3).
 What survives: the marker falsification (9.1), the raw counts (9.2/9.3), the blind spots (9.4).
+
+### 9.5b Carrier table, chunk-`0x07` only, payloads uncapped (current best) **[V]**
+
+Round-value literals per stage type (aligned dword == exact float), which is the honest version of §9.2 now
+that tails are visible:
+
+| stage type | interpreter case | round values found |
+|---|---|---|
+| `unk21` (`0x21`) | 31 | `24.0f` ×3,708 (a constant), a few `10` |
+| `unk28` (`0x28`) | 38 | `30`×1,514 · `24`×552 · `20`×549 · `10`×150 · `60`×54 · `12`×47 · `36`×38 |
+| `0x25` | 35 | `36`×675 · `30`×516 · `10`×457 · `24`×419 · `20`×337 · `15`×204 · `12`×187 |
+| **`0x2C`** | 42 | `20`×1,794 · `60`×139 · `10`×84 · `30`×20 · `90`×15 — and long payloads (≤21 dw) |
+| `0x5E` / `0xBF` | 92 / 189 | `12.0f` ×399 / ×49 |
+| **`0x62`** | 96 | `45.0f` ×214, nothing else |
+| `0x6E` / `0x0B` / `0x53` | 108 / 9 / 81 | small sets around `10/12/60/15` |
+| **`0xA9`** ActorRotation | 167 | `+45, +90, −90, −135 ×2`, mode byte `record+0x14 = 0` in all five |
 
 ### 9.6 Where that left S3 and plan B at the time **[I]**
 
@@ -480,8 +501,36 @@ count from the `cmp` bound (**[V]** — this is a trap worth remembering for any
 
 ### 10.3 What is still open on the data side **[I]**
 
-* Two authored-float carriers remain undecoded as *records*: stage **`0x28` (case 38)** — 6,234 records,
-  int + float ∈ {30,24,20,10,60,36,15}, spread over 5,259 files — and **`0x62` (case 96)** — 214 records,
-  always `(u16,u16) + 45.0f`. Read their handlers through the fetcher contract (§5b), not another census.
-* If coverage beyond chunk-`0x07` is ever needed, kuluu's reader needs two one-line fixes first (payload
-  print cap; `--all-types` KeyError). Both left untouched here per the research-only rule.
+* The authored-float carriers still undecoded as *records* (§9.5b ranks them): **`0x28`/case 38** and
+  **`0x62`/case 96** — clean, tiny layouts, so a consumer read should close each quickly; then the long-payload
+  family **`0x2C`/case 42**, `0x25`/case 35 and `unk21`/case 31, which need more layout work. Read handlers
+  through the fetcher contract (§5b), not another census.
+* Chunk coverage beyond `0x07` is now possible (reader fixed, §11) and has been measured: nothing usable is out
+  there — those bodies are mesh/motion data parsing as fake streams (§9.4 item 2).
+
+## 11. Reader fixes (our tooling, not kuluu code) — 2026-10-03 **[V]**
+
+The reader is `cow_tools/ffxi_disasm/dat_routines.py` plus a CRLF mirror at `ffxi_disassembly/dat_routines.py`
+(inside the kuluu tree). **Neither copy is under version control** — `cow_tools/` sits in `.git/info/exclude`,
+nothing in `ffxi_disassembly/` is tracked, and the two have already drifted (line endings, one docstring path).
+Worth deciding separately whether to track one canonical copy.
+
+Three changes, all in that script:
+
+1. **Payload printing uncapped** — `describe_stage` printed `raw[4:20]`, now prints `raw[4:]`. Verified on
+   `ROM3\0\43.DAT`: the five ActorRotation records show their fifth payload dword (`record+0x14`) for the first
+   time; its low byte — the ctor's mode argument — is **0 in all five**.
+2. **Short-record guard** — a known type whose record is shorter than the operand layout raised
+   `KeyError: 'timing'`, which is what killed `--all-types`; such records now print verbatim. Verified
+   synthetically: 8 known types × lengths 1–2 = 16 cases, zero exceptions.
+   *Honest gap:* across this install's dump (483,713 stage lines) the guard never fires, so I still cannot name
+   the record that killed the earlier run. The fix is defensive; if another dataset disagrees, the failure mode
+   is now a printed line rather than a crash.
+3. **CSV row build guarded** (`'timing' in s`) — otherwise the same class of crash simply moves to `--csv`.
+
+Cost and effect: a full install scan with `--all-types` finishes in ~28 s (it used to die around file 3,000),
+and chunk-`0x07` numbers are identical before/after — scheduler counts unchanged, no regression **[V]**. The new
+conclusions from the wider/uncapped dump are §9.4 and the §9.5b carrier table.
+
+`tools/dat_stage_scan.py` gained matching discipline: tallies routines by chunk type, filters with `--chunk 07`,
+warns on unfiltered dumps, and flags stage lengths ≥16 dwords outside `0x07` as noise.
