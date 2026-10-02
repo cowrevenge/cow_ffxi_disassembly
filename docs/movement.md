@@ -1,0 +1,503 @@
+# FFXI retail client: local-player movement (M pass)
+
+How the retail client turns WASD into motion: the circle-walk (W/S radial, A/D angular
+around the camera), the speed/deadzone law, auto-run, ground projection, the contact
+gate, and the facing update. Findings **M1..** are a fourth pass, distinct from the mob
+pass (**F**), event pass (**E**), and camera pass (**C**). Conventions (RVA base
+0x10000000, POL1-packed `.text`, evidence tiers) are in [../README.md](../README.md).
+
+Target binary: `FFXiMain.dll`, build TDS **0x6A995428** (2,901,584 bytes, PhoenixXI
+install, `client=retail-2026-09`). This is a *newer* build than the F/E/C passes
+(TDS 0x6A7297F5); every RVA here is only valid against 0x6A995428. XIClient source was
+used only as a navigation map for where to look; every finding below is verified in
+this DLL.
+
+## 1. Scope
+
+| # | Question | Status |
+|---|----------|--------|
+| Q1 | Is retail A/D angular-about-camera or tangent-velocity? | Resolved (M5): input vector rotated by camera azimuth — polar/circle-walk |
+| Q2 | Where is the movement integrator? | Resolved (M9): `*pos += dir` inline at 0xA6F31; contact gate 0xA8770 |
+| Q3 | What is the walk/run law? | Resolved (M3): 0xA78D0, deadzone 0.05, run at mag ≥ 1/3, `field_594` |
+| Q4 | What are the camera fields used for movement? | Resolved (M12): cam+0x24/+0x2C = direction, +0x44/+0x50 = eye/lookat |
+| Q5 | Where does auto-run live? | Resolved (M6): flag 0x487F81, unit vector 0x487F64..+0xC |
+| Q6 | Entity position layout? | Resolved (M9, M14): live pos at ent+0xD4/+0xD8/+0xDC |
+| Q7 | Do the Q/E turn keys move camera and body? | Resolved (M15): yes — camera azimuth integration + body heading re-assign |
+| Q8 | Is a W+D diagonal normalized to full speed? | Resolved (M3/M16): yes — axes divided by magnitude before the scale |
+| Q9 | What is the camera pitch law? | Resolved (M17): tick-scaled ±6.0, clamps 23.0/10.0, both-keys ease to 15.0 |
+| Q10 | Is the left/right arrow yaw live? | Resolved (M19): dead path in this build — no retail rate exists |
+
+## 2. The control function (M1, M2, M4)
+
+**M1 [local].** The whole third-person control chain is one function,
+**0xA65CB..0xA70AB** (called by the per-frame player tick; 2 direct callers).
+Prologue reads the input manager `g_pCTkInputCtrl` @rva **0x57876C**:
+`call 0x158AA0` (SomeKeyCheck-shaped) and `mov cl,[ecx+0x22]` (`m_MainTarget.field_22`).
+When the check fails or field_22 == 0, the analog axes are read:
+
+| key | source | stored |
+|-----|--------|--------|
+| AnalogKey1 | `GetAnalogKey(0x3F, 4)` = call **0x123970** | `[esp+0x10]` |
+| AnalogKey2 | `-GetAnalogKey(0x3F, 5)` (fchs) | `[esp+0x14]` |
+
+**M2 [local].** Mouse reset + mouse steering: mouse object @rva **0x4E1D4C**;
+`[mouse+0xA8] = 0.0f`, `[mouse+0xAC] = 0`. `CFsConf6Win::Check()` = call **0x25E050**.
+When active, `HandleMouseSteering` = **0xA77A0**(actor, &key2, &key1, &out) rewrites
+the axes from the drag angle and stores the angle at `mouse+0xA8`, `mouse+0xAC = 1`.
+
+**M4 [local].** The movement vector is built at 0xA6A6F in **world axes**:
+`dir = {-key2 * speed, 0, key1 * speed}` (stack `[esp+0x18..0x20]`), where `speed`
+comes from 0x25E170/0x25E100 (walk-speed / 60 shaped). Later, at 0xA6F04,
+`dir *= dt` via 0x272B0(`dir`, &`[esp+0x64]`); `[esp+0x64]` is the frame delta from
+call **0x14CF0** (returns the tick scale on the FPU stack).
+
+## 3. Speed / deadzone law (M3)
+
+**M3 [local].** `AdjustAnalogKeyLength` = **0xA78D0..0xA7998**
+(`ret 0xC`; thiscall + 3 ptr args: &key1, &key2, &out_scale).
+`mag = fsqrt(*key1² + *key2²)`; axes are normalized by `mag` (guarded by
+fcomp against 0.0 @0x3295D8 with epsilon 1e-6 @0x32A42C). Scale:
+
+| condition | scale |
+|-----------|-------|
+| `mag <= 0.05f` (@rva 0x32A3E0) | 0 (stand still) |
+| `0.05 < mag <= 0.9` (0.9 @rva **0x32C9A4**, compared 0xA7918) | 1/3 (walk band, immediate 0x3EAAAAAB at 0xA7939) |
+| `mag > 0.9` | 1.0 (run) |
+
+The walk-lock test (vtable `+0x338`) follows with a clamp that is dead in this
+build (see below).
+
+Both axes are multiplied by the scale and the scale is stored at
+**`actor+0x594`** (the `field_594` speed slot). The run threshold 0.9 is not a
+`.text` immediate in this build — it lives in `.data` at **0x32C9A4** and is
+compared at 0xA7918 (fcomp), so the 0.9 / 1/3 / 0.05 three-band law of the
+XIClient transcription is intact here, just data-referenced.
+
+Because the axes are divided by `mag` before the scale (1e-6 guard), a digital
+W+D diagonal arrives as a unit vector: **(diagonals move at full speed, not
+√2)** — W alone and W+D cover the same yalms per tick. An analog stick under
+0.9 deflection sits in the 1/3 walk band.
+
+Build quirk: the walk-lock clamp block (0xA7960..0xA7973) is a **no-op in this
+build** — its branch (`fcomp [1/3]; and eax, 0x4100; jne skip`) only executes
+the `scale := 1/3` store when scale is *exactly* 1/3, so a locked full-run
+scale (1.0) passes through unclamped. The C++ transcription's
+`if (v20 > 1/3) v20 = 1/3` does not match this binary's branch; if a
+walk-lock cap matters in this build it must come from elsewhere.
+
+## 4. The circle-walk (M5)
+
+**M5 [local].** After the status gates (M7) the free-run path
+(`vtable +0x330` != 0) calls **0xA79A0**(actor, &dir) at 0xA6C87. 0xA79A0 is the
+camera-azimuth rotation:
+
+```
+cam = GetCameraMng()                      ; call 0x15250
+az  = fpatan( -[cam+0x2C], [cam+0x24] )   ; camera azimuth (0xA79B4..0xA79DE)
+M   = RotateY(az)                          ; 0x27BD0 builds the 4x4 at [esp+0x3C]
+dir = M * dir                              ; 0x28200/0x28230 (in-place, 0xA79F4..0xA79F9)
+```
+
+So the raw `{-key2, 0, key1}` vector is rotated by the camera's horizontal bearing:
+**W/S move along the camera axis (radial), A/D move perpendicular to it (angular,
+around the camera position)**. The camera itself does not follow the player's facing —
+`UpdatePlayerFollowingCamera` (M11) is only nudged while movement keys are held.
+This is the retail "polar / tank-style" walker the user observed.
+
+The parallel-move path (`vtable +0x330` == 0, i.e. `IsParallelMove`) instead calls
+**0xA7B80**(&dir) at 0xA6D19 — direction-id + vector-length change, **no camera
+rotation** (strafe-style, used by mounts/parallel controls).
+
+## 5. Auto-run (M6)
+
+**M6 [local].** Auto-run state is two globals:
+- flag **0x487F81** (`is_auto_running`), set by **0xA6070**(on/off);
+- unit direction vector **0x487F64 / +0x487F68 / +0x487F6C** (`auto_run_vec`),
+  seeded from `0x35BBA8..` (0xA607D) or re-seeded from the actor's current direction
+  when degenerate (0xA6193: `mag = fsqrt(v·v)`; if `|1 - mag| < ε` and the actor
+  vector is valid, copy `actor→0x487F64..+0x70`).
+
+While auto-running (flag set, vec non-zero):
+- the movement vector is **overwritten** with `auto_run_vec` (0xA6D4D, copy3f via
+  0x26EB0); `[0x487F84] = 0` afterwards;
+- holding forward (key1 ≠ 0) **rotates `auto_run_vec` in place** by
+  `2 * key1 * [esp+0x4C]` (0xA6CD0..0xA6D10: 0x27BD0 + 0x28200) — the circle-turn;
+- auto-run stops when the input vector opposes it: dot with `auto_run_vec` vs
+  -0.01 @0x32DF8C, cross-y window ±0.4 @0x32DF40/0x32DFA0, 0.3 @0x32B15C
+  (0xA7A0B..0xA7AAE) → calls 0xA6070(0).
+
+## 6. Gates (M7, M8)
+
+**M7 [local].** Movement is allowed only when:
+- `0x84600` (control-lock state) < 3 (checked in 0xA8770 at 0xA8785);
+- `GetGameStatus` = **0x84390** ∈ {0, 1, 4, 0x1C, 0x1F} (0xA6C38..0xA6C50), or the
+  mount siblings 0x84350/0x84370 pass;
+- `byte [0x487F80]` clear (user control not suspended; 0xA668F);
+- the camera-follow flag `byte ([0x4568FC]+8)` only gates M11, not movement.
+
+**M8 [local].** Ground handling (after rotation): if `vtable +0x198` != 0 (on
+ground / has ground normal), the direction is re-orthogonalized against the ground
+normal: `dir = normalize(cross(normalize(dir), normal)) × cross(normal, ·)` (0x27550
+cross helper, 0xA6D65..0xA6DD5); y < 0 is clamped. In air: `dir *= 0.25`
+(0x272B0 with immediate 0x3E800000 at 0xA6E39).
+
+## 7. Integration + contact (M9, M14)
+
+**M9 [local].** The integrator is *inline* in the control function, at 0xA6F1D:
+`call 0xA8770` (**CheckContactActor**(actor, &dir)) — if it returns 0 (not blocked),
+`*pos += dir` is done directly:
+
+```
+0xA6F26  mov eax, [esp+0xEC]      ; pos pointer (passed by the tick caller)
+0xA6F2D..0xA6F46  fadd/fstp [eax], [eax+4], [eax+8]   ; x,y,z
+```
+
+**M14 [local].** `0xA8770..0xA89D1` is the contact/collision gate (it never writes
+position itself). It reads the live position from **`ent+0xD4/+0xD8/+0xDC`**
+(0xA8792, and via vtable `+0x1BC` = GetPosition at 0xA7ADE/0xA8838-ish call sites)
+and iterates candidate actors via 0x85240/0x85270 (query/next). A candidate blocks
+when within **dist² < 40.0** (immediate 0x42800000 at 0xA87B5; radius ≈ 6.32 yalms —
+the "walking alongside" distance), it is a live player-shaped actor (type gate
+`ent+0x170` ∉ {2,3}; status via 0x84400 ∈ {1,2,6,7,8}; `byte ent+0xB2` & 3 == 0;
+face-slot 0x84480(0) ∈ 50..59; fade `ent+0x59C` < 1.0), etc. On block it returns 1
+and manages the contact fields: **`ent+0x5A0`** = contact-actor link (set/cleared via
+0x814F0), **`ent+0x5AC`** = countdown (30 = 0x1E at 0xA899C, decremented by the tick
+scale at 0xA8976), **`ent+0x5B0`** = contact flag.
+
+The earlier "POS builder reads ent+8/+0xC/+0x10" note from the handoff was a stack
+misread; the entity's live position is at **+0xD4** (M14). The 0x015 POS reporter at
+0x983F0 (called from the per-tick local-player scan at 0x969F4) therefore reports the
+same +0xD4 triple.
+
+## 8. Facing update (M10)
+
+**M10 [local].** After integration, when free-run and moving:
+- single-axis (dir.x == 0 or dir.z == 0): `yaw = -fpatan(dir.z, dir.x)`
+  (0xA7072..0xA709D);
+- diagonal with a key held: build `keyvec = {-key2, key1, 0}` (0x26E50 at 0xA6FD2),
+  `az = fpatan(-[cam+0x2C], [cam+0x24])`, rotate keyvec by az (0x27BD0 + 0x28200 at
+  0xA7008..0xA7028), then `yaw = -fpatan(rot.z, rot.x)`;
+- store: `actor+0xE8 = yaw`, `actor+0xE4/+0xEC/+0xF0 = direction triple`; the
+  `SetDir`-shaped call **0x1E2F0**(1, 0) is used on the mouse-steering facing paths.
+
+The body always faces the direction of travel (or the camera-rotated input while
+turning) — the camera never drags the facing.
+
+## 9. Camera follow (M11)
+
+**M11 [local].** `UpdatePlayerFollowingCamera` = **0x1EE60** on the camera manager.
+Called at 0xA66CB only when `byte ([0x4568FC]+8) == 0` **and**
+`(key1 != 0 || key2 != 0)` — i.e. the camera is re-anchored to the player only while
+movement keys are pressed; otherwise it stays where the user aimed it (the free
+camera). This is the "drag / re-anchor" behavior: the camera does not continuously
+track the player.
+
+## 10. Q/E turn keys (M15, M16)
+
+**M15 [local].** The Q/E turn keys drive **both** the camera and the body.
+
+Camera side — in the camera-manager per-frame update (the function containing
+0x1EF00..0x1F14A, sibling of `UpdatePlayerFollowingCamera`):
+
+```
+axis6 = GetAnalogKey(0x3F, 6)              ; 0x1EF4E, the signed turn axis
+tick  = call 0x14CF0                        ; frame scale
+cam+0x48 += tick * axis6 * 0.10666667      ; 0x1F0F2..0x1F147, rate @0x32A3E4
+```
+
+`cam+0x48` is read back in the same camera code (0x1E6E9, 0x1E7DF, 0x1E8AF),
+consistent with an azimuth accumulator behind the +0x24/+0x2C direction pair
+(M12). A second rotation path exists — `call 0x1EBB0(angle)` at 0x1F0ED,
+where 0x1EBB0 re-derives the bearing from eye(+0x44)/look-at(+0x50), adds the
+angle (0.027924445 rad/tick = 1.6° per tick, 0x32A3EC) and wraps to [-π, π] —
+but in this build its angle source is a slot that is zero-cleared before the
+key-hold multiplies (0x1EF30..0x1EFA1), so that path is degenerate (angle 0)
+and the cam+0x48 integration is the effective Q/E camera rotation.
+
+Body side — in the control function (0xA65CB), reached when free-run, no event
+sub-state, and the W/S axis >= 0:
+
+```
+Q_held = 0x25E100()  ; 0xA68DB : input mode == 1 (call 0x123EE0), axis6 >= 0,
+                     ;          axis7 >= 0, SomeKeyCheck(0x3F, 0xA9, 4, -1)
+E_held = 0x25E170()  ; 0xA68D2 : same gate, key 0xAA instead of 0xA9
+turn   = Q_held - E_held            ; 0xA68E6
+```
+
+- auto-run && turn >= 0: the A/D axis slot is forced to **+1.0** (0xA68FB) and
+  the run steers — the auto-run steer, the body turning with the held key;
+- A/D > 0 branch: the body heading is **re-assigned** to
+  `slot + (π/2) * slot * turn` (0xA692A..0xA6936, π/2 @0x32D430), the direction
+  triple and yaw are written to **actor+0xE4/+0xEC/+0xF0/+0xE8** and the
+  SetDir-shaped **0x1E2F0** is called (0xA696C..0xA6998) — the body rotates to
+  face the new travel direction;
+- A/D < 0 branch: the W/S slot is zeroed, the direction is rebuilt from the
+  lateral axis (normalize via 0x274B0 at 0xA69F9) and 0x1E2F0 is called
+  (0xA69B7..0xA6A1A).
+
+So retail Q/E is not a rotate-in-place: it integrates the camera azimuth (M15
+camera side) and re-assigns the body heading so the body keeps facing travel
+(M15 body side) — the same facing-from-travel rule as M10, driven by the turn
+keys instead of the move vector.
+
+**M16 [local].** Device 0x3F analog action table (this build):
+
+| action | key | read as |
+|--------|-----|---------|
+| 4 | W/S | AnalogKey1, forward axis (0xA6603) |
+| 5 | A/D | AnalogKey2, sign-inverted at read (0xA6610, fchs) |
+| 6 / 7 | Q/E | the signed turn pair: axis6 feeds the camera azimuth (M15); axis6/axis7 >= 0 gate the Q/E predicates; 0x25E1E0 returns `E_held - Q_held` |
+
+Discrete key checks ride the same device via 0x123A70 (SomeKeyCheck):
+**0xA9 = Q**, **0xAA = E** (0x25E13B, 0x25E1AB). The camera update also polls
+raw key holds 0x8B/0x8C through 0x193850 (0x1EF67, 0x1EF86) on the degenerate
+1.6° path.
+
+## 11. Camera pitch, arrow yaw, spring-back, and the tick (M17–M20)
+
+**M17 [local].** Camera tilt (pitch) is integrated in the camera-manager
+per-frame update (the same function as the M15 Q/E integration):
+
+```
+pitch += +tick * 6.0    ; up: 0x1F826..0x1F84F, rate @0x32A3E8
+        clamp > 23.0 -> 23.0      ; @0x32A3D8
+pitch += -tick * 6.0    ; down: 0x1F876..0x1F8A7
+        clamp < 10.0 -> 10.0      ; @0x32A3D4
+```
+
+Both keys held sets byte **`[0x10456D84] = 1`** (0x1F806); while it is set
+(0x1F76E..0x1F7C2) the integration is replaced by an ease toward the midpoint:
+`pitch += (15.0 - pitch) x 0.25` per frame (15.0 @0x32A3DC, 0.25 @0x329CE4).
+The 15.0 hard-clamp branch (0x1F7AE) and the only byte-clear (0x1F7B6) are both
+dead, so the ease state is **sticky until a camera reset** (0x1E649 clears the
+byte). The mouse wheel (0x1F8B6..0x1F93D) applies the same ±tick·6.0 with the
+same clamps, gated by `CFsConf6Win::Check()` (0x25E050) with the delta from
+0x25E200; after any change it notifies 0x25E230 and stores via 0x15290.
+Pitch getter/setter quirk: value getter **0x152C0** reads `A+0x2F4`, setter
+**0x15290** (→ 0x152B0) writes `A+0x2F8`, and a second getter **0x152D0**
+reads `+0x2F8`. The getter and setter disagree on the offset in this build.
+
+**M18 [local].** Spring-back (the look-at ease that pulls the camera back when
+the turn keys come up) is two words: mode byte **`[0x10456DB0]`** and reference
+angle **`[0x10456DB4]`**, written by setter **0x1E2F0**(mode, flag, angle),
+which also clears vestigial byte 0x10456DB1 (single write site in the binary,
+never read). Callers: the camera reset 0x1E685 (mode 0, after zeroing
+0x10456D80..0xDA8 at 0x1E643..0x1E67F); the control fn 0xA65CB at 0xA6998
+(A/D released: mode 1, wrapped-heading expression), 0xA69AA (A/D held),
+0xA6A1A, 0xA6A46/0xA6A5D (gated by the 0x10456D88 counter through getter
+0x1E2C0; 0x1E2D0 sets `[0x10456D88] = arg ? 8 : 0`), and 0xA6C29 (mouse mode
+via 0x25E050). The consumer (0x1F14D..0x1F255) fires only when the Q/E
+predicate slot `[esp+0x1C]` == 0.0 and the mode != 0: it takes
+`angle = -[0x10456DB4]`, scales it x 6.0/max(dist, 0.01) when not free-run,
+zeroes it while the countdown (M20) > 0, arms the hold-off when 0, and rotates
+the look-at around the eye via `0x1EBB0(angle)` (the same routine as the dead
+arrow path, M19). **Unresolved:** the reference-angle expression at
+0xA692A..0xA6936 contains an FPU stack underflow (`fmul st(1)` on a
+one-element stack), so the stored value cannot be decoded byte-for-byte.
+
+**M19 [local].** The left/right arrow yaw is **dead in this build**. The key
+slots `[esp+0x1C]`/`[esp+0x20]` are zero-cleared at 0x1EF30/0x1EF38 and then
+only multiplied by -1.0 (@0x32A3F0) while keys 0x8B/0x8C are held
+(0x1EF67..0x1EFA1): 0 x -1 = -0. The `0x1EBB0(angle)` consumer they feed
+(0.027924445 rad @0x32A3EC = 1.6 degrees per tick, scaled x tick x
+6.0/max(dist, 0.01)) therefore always rotates by 0. There is no retail
+left/right arrow yaw rate in this build to port.
+
+**M20 [local].** The frame tick: **0x14CF0** returns
+`min([0x104568FC]+0x28, 1.0)` with NaN -> 1.0. The unit is **seconds**,
+decided by the pitch-rate feel (6.0 x tick must be ~0.1 degrees at 60 fps) and
+consistent across 215 call sites in 170 functions. The write site for
+`[0x104568FC]+0x28` is not statically findable (register tracking with
+reassignment, lea, thiscall setters, and tiny thunks all came up empty), so the
+tick's origin is indirect. Consequence: the `round(tick)` sub-loops (history
+loop 0x1F667, re-anchor loop 0x1FA4F..0x1FE88) run **zero iterations** at a
+normal frame rate - they are stall-recovery machinery, not per-frame work.
+
+The keyboard analog axis behind M15 is fnA **0x120C70** =
+`(int8)(kbdobj+0x250 - 0x80) x 0.015625` (scale 1/64 @0x32A778; kbdobj =
+`[0x104E1D44]`). A fully held key reads 127/64 = **1.984375**, so the
+effective held-Q/E azimuth rate is 0.10666667 x 1.984375 = **0.211667 rad/s
+(~12.1 degrees/s)**. The Q/E integration is suppressed while the countdown
+`[0x10456D7C]` > 0 (0x1F10F..0x1F12E); the hold-off `[0x10456D74]` (= 10) is
+armed when the Q/E/pan delta is exactly 0 (0x1F13F..0x1F141).
+
+Correction to M4: 0x25E170/0x25E100 are the **E-held / Q-held predicates**
+(M15 body side), not a speed source - the "speed from 0x25E170/0x25E100" in
+§2 is a misattribution.
+
+Camera state block (all sites grep-verified):
+
+| Offset | Meaning (this build) |
+|--------|----------------------|
+| 0x10456D70 | int; reset/cleared by the re-anchor |
+| 0x10456D74 | hold-off int (= 10) |
+| 0x10456D78 | azimuth reflection bound (float; also written at 0x20B81/0x2126F/0x218D7) |
+| 0x10456D7C | countdown float (-1.0 per re-anchor sub-step 0x1FA55; = 20.0 at 0x20769 in fn 0x20446, which has 0 direct callers; = 8.0 at 0x21147 in fn 0x210ae; zeroed 0x1FA82) |
+| 0x10456D80 | = 60 counter (thunk 0x1E2B0, caller 0x18B4E1) |
+| 0x10456D84 | both-pitch-keys byte (M17) |
+| 0x10456D88 | 0/8 counter (key 0x51 sets 8 @0x201D7) |
+| 0x10456D8C | 0/4 counter |
+| 0x10456D90 | global 3f vector used by the re-anchor body |
+| 0x10456DB0 | spring-back mode byte (M18) |
+| 0x10456DB4 | spring-back reference angle (M18) |
+
+Also verified in this pass: 0x311C2C = round-to-nearest int(float) (953 call
+sites); the GetAnalogKey fnB slots (0x122E20/0x123030/0x1232E0/0x123450) are
+pad getters, combined with fnA by the tail 0x1239F6..0x123A54 with sign
+handling; the re-anchor loop body (0x1FA34..) gates on the countdown and key
+0x91 (0x1F984) with distance gates 3.0/1.0, normalizes, scales x1.5
+(0x40466666) through the 0x1815B0 gate, and its eye-move block uses 0x274B0
+dot windows -1.0 (@0x32A3D0) / 0.99 (@0x32A3CC), 0x272E0 (divide by 3), x0.01
+(@0x329A18) x0.05 (@0x32A3E0), and `fild [0x1035121C]` (int global) before the
+eye update 0x1FC97..0x1FCEF; the post-loop reflection rewrites the azimuth as
+`cam+0x48 = 2*cam+0x48 - [0x10456D78]` when hold-off == 0, countdown > 0, and
+cam+0x48 >= cam+0x54.
+
+## 12. Camera manager layout, this build (M12, M13)
+
+**M12 [local].** `GetCameraMng` = **0x15250** = `mov eax,[0x104568FC]; mov
+eax,[eax+0x50]; ret` (two-level: global @0x4568FC → manager at +0x50). Sibling
+getters: 0x15220 (+0x94), 0x15230 (+0xD4), 0x15260 (+0x114). Manager fields used by
+movement:
+
+| Offset | Meaning (this build) | Used by |
+|--------|----------------------|---------|
+| +0x24 / +0x2C | camera horizontal direction (x, z) | M5 azimuth, M10 facing, M13 |
+| +0x44..+0x4C | cached eye position (x, y, z) | 0xA6799 (dir = eye−lookat via 0x27120) |
+| +0x50..+0x58 | cached look-at target (x, y, z) | 0xA6796 |
+
+This differs from the 0x6A7297F5-era C2 table (which had eye/lookat at +0x44/+0x50
+only); the +0x24/+0x2C direction pair is what movement consumes.
+
+**M13 [local].** The handoff's "camera-distance fn at 0xA7933 (cam+0x24/+0x2C,
+fpatan, fsqrt)" is a conflation of two functions in this build:
+- 0xA7933 is *inside* AdjustAnalogKeyLength (0xA78D0) — the 1/3 walk-lock block (M3);
+- the cam+0x24/+0x2C + fpatan code is 0xA79A0 (M5), the circle-walk rotation.
+No separate distance-check function was found; the distance logic that does exist is
+the contact radius (M9) and the auto-run magnitude (M6).
+
+## 13. Reference tables
+
+### Vector/matrix helpers (all `ret`, cdecl)
+
+| RVA | shape | meaning |
+|-----|-------|---------|
+| 0x26E50 | (dst, x, y, z) | set3f |
+| 0x26EB0 | (dst, src[, ·]) | copy3f |
+| 0x26F20 | (a, b) | a += b (3f) |
+| 0x27120 | (out, a, b) | out = a − b |
+| 0x272B0 | (v, &s) | v *= s |
+| 0x274B0 | (v[, ·]) | normalize / unit-ish (T9: zero/NaN guard ×9999999 @0x32A4CC) |
+| 0x27510 | (a, b) | ***a = normalize(\*a)** — 2nd arg unused (T9 corrected: was "a − b") |
+| 0x27530 | (a, b) | dot3 → st(0); plain `ret`, callers clean the stack (T9) |
+| 0x27550 | (out, a, b) | cross3 |
+| 0x27990 | (m) | **no-op** (T9 corrected: was "zero a 4x4") |
+| 0x279B0 | (m) | zero m[1]..m[12]; m[0], m[13..15] untouched (T9) |
+| 0x279A0 | (m) | **no-op** (T9) |
+| 0x272E0 | (src, dst, s) | dst = src·s, s = 3rd stack word by value (T9 corrected: was "divide") |
+| 0x27BD0 | (angle, m) | angle = 1st stack word; RotateY into m via 0x27D10 (T9/T12) |
+| 0x28200 | (m, v) | v = M·v in place |
+| 0x28230 | (dst, src, m) | dst = M·src, translation m+0x30..+0x38; ret 8 |
+
+T-pass corrections (T9) verified by direct disassembly at TDS 0x6A995428; the
+extended helper table (0x81550/0x81600, 0x157CF0/0x1598A0, 0xAAEF0, 0xA6070)
+is in [target_track.md](target_track.md) §6.
+
+### Key methods on the player object (`this` = esi in 0xA65CB)
+
+| vtable slot | meaning (inferred from use) |
+|-------------|-----------------------------|
+| +0x1BC | GetPosition → ent+0xD4 (3f) |
+| +0x198 | on-ground / has ground normal |
+| +0x210 | GetGroundNormal |
+| +0x330 | IsFreeRun (1 = normal walking, 0 = parallel/strafe) |
+| +0x338 | IsWalkLock (its AdjustAnalogKeyLength clamp is a no-op in this build, M3) |
+| +0x340 | event/mount sub-state (facing-path gate) |
+| +0x344 | mode set (called with 1 / 0) |
+
+### Constants
+
+| RVA | value | used for |
+|-----|-------|----------|
+| 0x3295D8 | 0.0 | zero compares |
+| 0x32961C | 1.0 | normalize divisor |
+| 0x32A22C | 0.001 | auto-run magnitude epsilon |
+| 0x32A3E0 | 0.05 | input deadzone (M3) |
+| 0x32A42C | 1e-6 | normalize guard (M3) |
+| 0x32A84C | 1/3 | walk band scale (M3; immediate 0x3EAAAAAB) |
+| 0x32C9A4 | 0.9 | run threshold (M3, data-referenced at 0xA7918) |
+| 0x32A3E4 | 0.10666667 | Q/E camera azimuth rate per tick (M15) |
+| 0x32A3EC | 0.027924445 | 1.6°/tick, degenerate 0x1EBB0 path (M15) |
+| 0x32A3F0 | -1.0 | sign flip, degenerate key-hold path (M15) |
+| 0x32A3D8 | 23.0 | pitch upper clamp (M17) |
+| 0x32A3D4 | 10.0 | pitch lower clamp (M17) |
+| 0x32A3DC | 15.0 | both-keys pitch ease midpoint (M17) |
+| 0x329CE4 | 0.25 | both-keys pitch ease factor (M17) |
+| 0x32A3E8 | 6.0 | pitch rate per tick (M17) |
+| 0x32A778 | 1/64 | keyboard analog axis scale (M20) |
+| 0x329A18 | 0.01 | re-anchor eye-move scale (M20) |
+| 0x40466666 | 1.5 | re-anchor loop scale (M20) |
+| 0x32B15C | 0.3 | auto-run stop cross-y (M6) |
+| 0x32D430 | π/2 | facing clamp (mouse path) |
+| 0x32DF40 / 0x32DFA0 | ±0.4 | auto-run stop cross-y window (M6) |
+| 0x32DF8C | −0.01 | auto-run stop dot (M6) |
+| 0x329D28/0x329D2C/0x329D30 | −2π/2π/π | angle wraps (0xC9330 pose clamp) |
+
+## 14. Findings index
+
+| # | Tier | Statement | Evidence |
+|---|------|-----------|----------|
+| M1 | [local] | Control fn 0xA65CB; axes GetAnalogKey(0x3F,4/5) via 0x123970; input global 0x57876C | this doc §2 |
+| M2 | [local] | Mouse 0x4E1D4C +0xA8/+0xAC; steering 0xA77A0; CFsConf6Win 0x25E050 | §2 |
+| M3 | [local] | 0xA78D0 speed law: deadzone 0.05, run ≥ 1/3, field_594; no 0.9 in .text | §3 |
+| M4 | [local] | dir = {−key2·speed, 0, key1·speed}; dt via 0x14CF0, scale 0x272B0 | §2 |
+| M5 | [local] | Circle-walk: dir = RotateY(fpatan(−cam+0x2C, cam+0x24))·dir in 0xA79A0 | §4 |
+| M6 | [local] | Auto-run: 0x487F81 flag, 0x487F64.. vec, stop thresholds 0.4/−0.01/0.3 | §5 |
+| M7 | [local] | Gates: 0x84600 < 3, status 0x84390 ∈ {0,1,4,0x1C,0x1F}, 0x487F80 | §6 |
+| M8 | [local] | Ground: cross-orthogonalize w/ normal (0x27550); air ×0.25 | §6 |
+| M9 | [local] | `*pos += dir` inline 0xA6F31; contact gate 0xA8770, radius² 40.0 | §7 |
+| M10 | [local] | Facing −atan2(dir.z,dir.x) or camera-rotated keyvec; actor+0xE8/E4/EC/F0 | §8 |
+| M11 | [local] | UpdatePlayerFollowingCamera 0x1EE60, only while keys held | §9 |
+| M12 | [local] | Manager: dir +0x24/+0x2C, eye +0x44, lookat +0x50; getter 0x15250 two-level | §11 |
+| M13 | [local] | 0xA7933 is M3's 1/3 block; the cam+0x24 fpatan fn is 0xA79A0 (handoff conflation) | §11 |
+| M14 | [local] | Live position ent+0xD4/+0xD8/+0xDC; contact fields +0x5A0/+0x5AC/+0x5B0 | §7 |
+| M15 | [local] | Q/E turn keys rotate camera (cam+0x48 += tick·axis6·0.10666667, 0x1F0F2..0x1F147) and body (heading re-assign + SetDir 0x1E2F0, 0xA68D2..0xA6998) | §10 |
+| M16 | [local] | Device 0x3F actions: 4=W/S, 5=A/D (inverted), 6/7=Q/E pair; discrete 0xA9=Q, 0xAA=E | §10 |
+| M17 | [local] | Pitch: tick x 6.0, clamps 23.0/10.0 (0x32A3D8/0x32A3D4); both keys ease to 15.0 x 0.25/frame, sticky byte 0x10456D84 | §11 |
+| M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; angle expression FPU-underflowed | §11 |
+| M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
+| M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard digital = 127/64 (1/64 scale @0x32A778); held Q/E = 0.211667 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
+
+## 15. Kuluu conclusions (for the walker rework)
+
+- Kill auto-recenter-follow: the camera is free; it re-anchors only on input (M11).
+- Movement is camera-anchored polar: rotate the raw input by the camera azimuth,
+  integrate, then face the travel direction (M5 + M9 + M10). There is no
+  character-relative turn in normal walk mode.
+- Speed law: deadzone 0.05, walk band 0.05..0.9 at 1/3, run above 0.9 at full
+  (M3); diagonals are magnitude-normalized to full speed (M3/M16). Walk = 1/3
+  of run — and the walk-lock clamp inside AdjustAnalogKeyLength is dead code in
+  this build, so do not expect that path to cap a held run (M3).
+- Q/E is a turn key pair, not a strafe: it integrates the camera azimuth (M15)
+  and re-assigns the body heading so the body keeps facing travel (M15). A
+  kuluu Q/E that orbits the camera and rotates the body is retail-shaped.
+  Ported to kuluu (view_native/input.rs): held Q/E orbit 0.211667 rad/s
+  (~12.1 degrees/s, M15/M20); pitch 6.0 degrees/s with the both-keys ease to
+  15.0 at factor 0.25 (M17); the left/right arrows have no retail rate in
+  this build (M19) and are set to the pitch rate.
+- Spring-back exists in retail (M18) but its reference-angle expression is not
+  decodable (FPU stack underflow); documented, not ported.
+- Airborne movement is quartered (M8); contact with another player within ≈6.3 yalms
+  blocks the step for a 30-tick countdown (M9/M14).
+
+## 16. Open items
+
+- 0x123970 (GetAnalogKey) full decode — device 0x3F actions 4/5/6/7 are mapped
+  (M16); other actions and the 0x26/0x79/0x7C/0x83 devices remain.
+- The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
+- 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
+- Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
+- The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.
+- Spring-back reference-angle expression (M18): FPU stack underflow at 0xA692A..0xA6936.
+- The both-pitch-keys ease byte (M17) is sticky until a camera reset; no release path found.
+- Fn 0x20446 (countdown = 20.0 @0x20769) has 0 direct callers - presumably vtable-dispatched.
