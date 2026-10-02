@@ -130,8 +130,10 @@ not just a number.
   player. It re-anchors only while movement keys are held; the user aims it (mouse/Q/E)
   and it "sits" until re-anchored or the radial distance leaves its band.
 - **Q/E** integrates the azimuth (`cam+0x48 += tick·axis6·0.10666667`) [V] (M15).
-- **Pitch** integrates `±tick·6.0`, clamped 23.0 (up) / 10.0 (down); both keys ease to
-  15.0 [V] (M17).
+- **Zoom (focal)** integrates `±tick·6.0` focal units, clamped 900.0 / 242.0;
+  both zoom keys snap the focal to the 350.0 third-person default on the next
+  frame; the mouse wheel is the same path [V] (M17). FOV = 2·atan2(192, focal)
+  [web, E15]: 242 ≈ 76.9°, 350 ≈ 57.5°, 900 ≈ 24.1°.
 - **Spring-back** (M18) [V]: mode byte 0x456DB0 + reference angle 0x456DB4; when the turn
   keys come up the camera eases back toward the reference (the "catch-up" the user sees).
 - **Locked camera** [O + I]: when a target is locked the camera **focuses the target** and
@@ -185,7 +187,7 @@ Two layers: the **driver** (F pass) picks *which routine/clip* to play; the **sk
 - A **per-frame tick** (0x14CF0, ~1/60 s, clamped ≤ 1.0) drives [V] (M20):
   - **Local player** → control function 0xA65CB (input → movement → position + facing).
   - **All entities** → per-entity update 0x8F750 + flush 0x95DB0 (flags → animation).
-  - **Camera** → camera-manager update (Q/E, mouse, pitch, re-anchor, spring-back) + events.
+  - **Camera** → camera-manager update (Q/E, mouse, zoom (focal), re-anchor, spring-back) + events.
   - **Skeleton** → per-joint integrator (angle += dt × curve).
   - **Event VM** → cutscene opcodes.
 - **Server→client:** 0x0E (status/anim/sub), 0x28 (action), POS (position) packets set
@@ -210,7 +212,7 @@ Control Function 0xA65CB  (local-player tick)
    │   ┌────┴───────────────────────────────┐
    │   │ Camera Manager (0x4568FC+0x50)     │
    │   │  ← Q/E (azimuth cam+0x48), mouse,  │
-   │   │    pitch, re-anchor (M11),         │
+   │   │    zoom, re-anchor (M11),          │
    │   │    spring-back (M18), event 0x46   │
    │   │  focus = player (free) / target    │
    │   │           (locked)                 │

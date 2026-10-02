@@ -14,6 +14,19 @@ Web-tier sources: XiEvents, the vendored XiClient decompilation (`research/XICli
 
 Target binary: `FFXiMain.dll`, 2,901,584 bytes, dated 8/22/2026, TDS 0x6A7297F5.
 
+**Build port (2026-10-02, TDS 0x6A995428 — current install).** The whole event
+cluster sits ≈ −0x10 from the 0x6A7297F5 RVAs. Byte-verified in this build:
+ExecProg dispatch at **0xBC285** (function 0xBC280) — `movsx eax, word
+[esp+4]` (opcode arrives as a *word*), `cmp eax, 0xDA; ja 0xBC957` (default),
+`jmp [eax*4 + 0x100BC960]`; jump table **0xBC960**, **219 entries**
+(0x00..0xDA), entries 0x00/0xCA/0xCB all point at the default 0xBC957
+(e.g. [0x01] → 0xBC297 `call 0xAFCF0`, [0x02] → 0xBC29F `call 0xAFD10`).
+Every `evt_op_XX` handler RVA for 0x6A995428 is in `labels.csv` and `p7_newbuild.md`
+has all 20 XiEvents pattern hits re-anchored (EventStartWait 0xAEA40, InitEvent2
+0xAEEA0, EventIdle 0xBCD10, lookatone 0xB8810, …) — both in
+`session_out/ffximain_headless_v1.zip`. The opcode table and anchors in §2
+below remain valid for 0x6A7297F5; shift ≈ −0x10 when citing this build.
+
 ## 1. Targets
 
 | # | Target | Status |

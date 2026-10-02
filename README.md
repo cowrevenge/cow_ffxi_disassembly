@@ -18,7 +18,7 @@ Two builds were dissected (RVAs are **build-specific**):
 
 | TDS | Build | Passes |
 |---|---|---|
-| 0x6A995428 | retail-2026-09 (current install) | M, T, J |
+| 0x6A995428 | retail-2026-09 (current install, md5 fb7464073c06489268fdd9215c3e5313) | M, T, J; E cluster re-anchored 2026-10-02 (dispatch 0xBC285, jtable 0xBC960, 219 entries — event_vm.md) |
 | 0x6A7297F5 | older | F, C, E, U |
 
 ## Conventions
@@ -40,6 +40,25 @@ Two builds were dissected (RVAs are **build-specific**):
     navigation map for *where to look*, never as ground truth.
 - **Citation form for kuluu edits:** `FFXiMain.dll retail-2026-09 RVA 0x...`
   once numbers are extracted and approved.
+- **Byte re-read rule (from the M17/M20 incident, 2026-10-02):** every numeric
+  claim gets a byte re-read in the build it is claimed for before it lands in a
+  doc. Values inherited from XIClient or an earlier build are [web]/[I] until
+  re-read. The session_out/ zips make this cheap — use them.
+
+## Binary facts (TDS 0x6A995428)
+
+- **No RTTI** — compiled with /GR-; the only typeinfo-ish strings are CRT
+  exception names. The CXi*/CYy*/CMo* class names exist as allocator/debug tag
+  strings only (113 extracted: `session_out/ffximain_tables_v0.zip`,
+  `tables_classnames.csv`).
+- **Packer** — the POL1 LZSS above, independently re-derived from the entry
+  stub (flag byte MSB-first, 12-bit offset / 4-bit len+3, off==0 ends) and
+  matched to `common.py`. The static unpacker (`session_out/` `unpack.py`)
+  produces `FFXiMain.unpacked.dll` (raw==virtual, real OEP 0x31672F), which
+  loads into any tool without POL1 handling.
+- **Leaked source paths** (96, `tables_src_paths.txt`): 89 dancer engine
+  (`C:\dev\dancer\modules\sq*`) = C engine layer, 5 FFXi_Win game code
+  (`D:\build0001\FFXi_Win\`) = C++ game layer, 2 pol.
 
 ## Passes (docs/)
 
@@ -73,6 +92,10 @@ Requires: `pip install pefile capstone`.
 - `dat_routines.py`, `ffxi_dat_find.py`, `scene_dat_parse.py`,
   `probe_tpc_files.py`, `assemble_event_evidence.py` — model/scene DAT and
   TPC package tooling.
+- `session_out/` — the 2026-10-02 cloud-session artifact zips (ffximain_tables_v0,
+  ffximain_claims_v1, ffximain_headless_v1): unpacker + tables, claims CSV +
+  corrections, labels/functions/decomp for the current build. Inputs to the
+  passes — vendored, never regenerated.
 
 ## What is NOT here
 

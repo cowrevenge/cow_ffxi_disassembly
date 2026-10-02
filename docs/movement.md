@@ -24,7 +24,7 @@ this DLL.
 | Q6 | Entity position layout? | Resolved (M9, M14): live pos at ent+0xD4/+0xD8/+0xDC |
 | Q7 | Do the Q/E turn keys move camera and body? | Resolved (M15): yes — camera azimuth integration + body heading re-assign |
 | Q8 | Is a W+D diagonal normalized to full speed? | Resolved (M3/M16): yes — axes divided by magnitude before the scale |
-| Q9 | What is the camera pitch law? | Resolved (M17): tick-scaled ±6.0, clamps 23.0/10.0, both-keys ease to 15.0 |
+| Q9 | What is the camera zoom (focal) law? | Resolved (M17): focal ±6.0×tick, clamps 900.0/242.0, both keys snap to 350.0 |
 | Q10 | Is the left/right arrow yaw live? | Resolved (M19): dead path in this build — no retail rate exists |
 
 ## 2. The control function (M1, M2, M4)
@@ -70,7 +70,7 @@ build (see below).
 Both axes are multiplied by the scale and the scale is stored at
 **`actor+0x594`** (the `field_594` speed slot). The run threshold 0.9 is not a
 `.text` immediate in this build — it lives in `.data` at **0x32C9A4** and is
-compared at 0xA7918 (fcomp), so the 0.9 / 1/3 / 0.05 three-band law of the
+compared at 0xA7918 (`fcom`, d8 15 — not `fcomp`, which would be d8 35), so the 0.9 / 1/3 / 0.05 three-band law of the
 XIClient transcription is intact here, just data-referenced.
 
 Because the axes are divided by `mag` before the scale (1e-6 guard), a digital
@@ -253,29 +253,53 @@ Discrete key checks ride the same device via 0x123A70 (SomeKeyCheck):
 raw key holds 0x8B/0x8C through 0x193850 (0x1EF67, 0x1EF86) on the degenerate
 1.6° path.
 
-## 11. Camera pitch, arrow yaw, spring-back, and the tick (M17–M20)
+## 11. Camera zoom (focal), arrow yaw, spring-back, and the tick (M17–M20)
 
-**M17 [local].** Camera tilt (pitch) is integrated in the camera-manager
-per-frame update (the same function as the M15 Q/E integration):
+**M17 [local].** Camera **zoom (focal length)** is integrated in the
+camera-manager per-frame update (the same function as the M15 Q/E
+integration). *Correction 2026-10-02 (byte re-read in TDS 0x6A995428): the
+original M17 read this as camera pitch with clamps 23.0/10.0 and a 15.0
+midpoint — those numbers leaked in from the XIClient transcription. 23.0f
+does not exist anywhere in `.rdata` of this build (10.0f and 15.0f each
+occur once, unrelated to this block).*
 
 ```
-pitch += +tick * 6.0    ; up: 0x1F826..0x1F84F, rate @0x32A3E8
-        clamp > 23.0 -> 23.0      ; @0x32A3D8
-pitch += -tick * 6.0    ; down: 0x1F876..0x1F8A7
-        clamp < 10.0 -> 10.0      ; @0x32A3D4
+key 0x4F held:  focal +=  tick * 6.0     ; 0x1F826..0x1F84F, rate @0x32A3E8
+                     clamp > 900.0 -> 900.0   ; @0x32A3D8 (imm 0x44610000)
+key 0x50 held:  focal -=  tick * 6.0     ; 0x1F876..0x1F8A7
+                     clamp < 242.0 -> 242.0   ; @0x32A3D4 (imm 0x43720000)
 ```
 
-Both keys held sets byte **`[0x10456D84] = 1`** (0x1F806); while it is set
-(0x1F76E..0x1F7C2) the integration is replaced by an ease toward the midpoint:
-`pitch += (15.0 - pitch) x 0.25` per frame (15.0 @0x32A3DC, 0.25 @0x329CE4).
-The 15.0 hard-clamp branch (0x1F7AE) and the only byte-clear (0x1F7B6) are both
-dead, so the ease state is **sticky until a camera reset** (0x1E649 clears the
-byte). The mouse wheel (0x1F8B6..0x1F93D) applies the same ±tick·6.0 with the
-same clamps, gated by `CFsConf6Win::Check()` (0x25E050) with the delta from
-0x25E200; after any change it notifies 0x25E230 and stores via 0x15290.
-Pitch getter/setter quirk: value getter **0x152C0** reads `A+0x2F4`, setter
-**0x15290** (→ 0x152B0) writes `A+0x2F8`, and a second getter **0x152D0**
-reads `+0x2F8`. The getter and setter disagree on the offset in this build.
+With FOV = 2·atan2(192, focal) [web, E15]: 242 ≈ 76.9° (wide), 350 ≈ 57.5°
+(third-person default, E19), 900 ≈ 24.1° (tight).
+
+Both keys held sets byte **`[0x10456D84] = 1`** (0x1F806) and skips the
+integration that frame. While the byte is set (0x1F76E..0x1F7C2) the code
+computes `delta = (350.0 - focal) x 0.25` (350.0 @0x32A3DC, 0.25 @0x329CE4)
+and then — the two convergence compares (vs −1.0 @0x32A3F0 and vs 1.0
+@0x32961C, both parity-only NaN guards) fall through to a **hard snap**:
+`focal := 350.0` (imm 0x43AF0000 @0x1F7AE), the byte is cleared (0x1F7B6),
+and the value is stored via 0x15290. The `focal += delta` ease step
+(0x1F7C7) is only reachable when delta is NaN — effectively dead.
+Observable behavior: **both zoom keys snap the focal back to the 350.0
+default on the next frame.** (The pre-correction reading — "the snap branch
+and the byte-clear are dead, ease sticky until camera reset" — had the
+dead/live branches reversed.)
+
+The mouse wheel (0x1F8B6..0x1F93D) is the same path: gated by
+`CFsConf6Win::Check()` (0x25E050), delta from 0x25E200; positive delta
+integrates +tick·6.0 with the 900.0 clamp, negative −tick·6.0 with the
+242.0 clamp; after any change it notifies 0x25E230 and stores via 0x15290.
+
+Focal getter/setter pair on the camera manager (object @ [0x104568FC]):
+value getter **0x152C0** reads `+0x2F4` (what the integrator reads), setter
+**0x15290** (→ 0x152B0) writes `+0x2F8` (what the integrator stores), and a
+second getter **0x152D0** reads `+0x2F8`. The integrator thus reads one
+field and writes its sibling in this build.
+
+Open: the physical identity of key slots 0x4F/0x50 (device 0x3F) — the
+key-ID→key mapping table has not been extracted (user observation suggests
+the U/D arrow keys [O]).
 
 **M18 [local].** Spring-back (the look-at ease that pulls the camera back when
 the turn keys come up) is two words: mode byte **`[0x10456DB0]`** and reference
@@ -305,7 +329,8 @@ left/right arrow yaw rate in this build to port.
 
 **M20 [local].** The frame tick: **0x14CF0** returns
 `min([0x104568FC]+0x28, 1.0)` with NaN -> 1.0. The unit is **seconds**,
-decided by the pitch-rate feel (6.0 x tick must be ~0.1 degrees at 60 fps) and
+decided by the Q/E azimuth feel (0.10666667 × tick ≈ 0.1°/frame at 60 fps,
+a plausible held-key orbit rate) and
 consistent across 215 call sites in 170 functions. The write site for
 `[0x104568FC]+0x28` is not statically findable (register tracking with
 reassignment, lea, thiscall setters, and tiny thunks all came up empty), so the
@@ -314,10 +339,12 @@ loop 0x1F667, re-anchor loop 0x1FA4F..0x1FE88) run **zero iterations** at a
 normal frame rate - they are stall-recovery machinery, not per-frame work.
 
 The keyboard analog axis behind M15 is fnA **0x120C70** =
-`(int8)(kbdobj+0x250 - 0x80) x 0.015625` (scale 1/64 @0x32A778; kbdobj =
-`[0x104E1D44]`). A fully held key reads 127/64 = **1.984375**, so the
-effective held-Q/E azimuth rate is 0.10666667 x 1.984375 = **0.211667 rad/s
-(~12.1 degrees/s)**. The Q/E integration is suppressed while the countdown
+`(int8)(kbdobj+0x250 - 0x80) x 0.0078125` (scale **1/128** @0x32A778;
+kbdobj = `[0x104E1D44]`). A fully held key reads 127/128 ≈ **0.992**, so the
+effective held-Q/E azimuth rate is 0.10666667 × 0.992 ≈ **0.1058 rad/s
+(~6.1°/s)** — half the pre-correction 0.211667 rad/s, which assumed a 1/64
+scale. *Correction 2026-10-02: full disasm of fnA (sign-extended byte fild,
+then fmul [0x1032A778]); the byte re-read of 0x32A778 = 0.0078125 is final.* The Q/E integration is suppressed while the countdown
 `[0x10456D7C]` > 0 (0x1F10F..0x1F12E); the hold-off `[0x10456D74]` (= 10) is
 armed when the Q/E/pan delta is exactly 0 (0x1F13F..0x1F141).
 
@@ -334,7 +361,7 @@ Camera state block (all sites grep-verified):
 | 0x10456D78 | azimuth reflection bound (float; also written at 0x20B81/0x2126F/0x218D7) |
 | 0x10456D7C | countdown float (-1.0 per re-anchor sub-step 0x1FA55; = 20.0 at 0x20769 in fn 0x20446, which has 0 direct callers; = 8.0 at 0x21147 in fn 0x210ae; zeroed 0x1FA82) |
 | 0x10456D80 | = 60 counter (thunk 0x1E2B0, caller 0x18B4E1) |
-| 0x10456D84 | both-pitch-keys byte (M17) |
+| 0x10456D84 | both-zoom-keys byte: next frame snaps focal to 350.0, then clears (M17) |
 | 0x10456D88 | 0/8 counter (key 0x51 sets 8 @0x201D7) |
 | 0x10456D8C | 0/4 counter |
 | 0x10456D90 | global 3f vector used by the re-anchor body |
@@ -429,12 +456,12 @@ is in [target_track.md](target_track.md) §6.
 | 0x32A3E4 | 0.10666667 | Q/E camera azimuth rate per tick (M15) |
 | 0x32A3EC | 0.027924445 | 1.6°/tick, degenerate 0x1EBB0 path (M15) |
 | 0x32A3F0 | -1.0 | sign flip, degenerate key-hold path (M15) |
-| 0x32A3D8 | 23.0 | pitch upper clamp (M17) |
-| 0x32A3D4 | 10.0 | pitch lower clamp (M17) |
-| 0x32A3DC | 15.0 | both-keys pitch ease midpoint (M17) |
-| 0x329CE4 | 0.25 | both-keys pitch ease factor (M17) |
-| 0x32A3E8 | 6.0 | pitch rate per tick (M17) |
-| 0x32A778 | 1/64 | keyboard analog axis scale (M20) |
+| 0x32A3D8 | 900.0 | zoom upper clamp, focal (M17) |
+| 0x32A3D4 | 242.0 | zoom lower clamp, focal (M17) |
+| 0x32A3DC | 350.0 | both-keys zoom snap target = focal default (M17) |
+| 0x329CE4 | 0.25 | both-keys zoom ease factor (M17; dead step) |
+| 0x32A3E8 | 6.0 | zoom rate per tick, focal units (M17) |
+| 0x32A778 | 1/128 | keyboard analog axis scale (M20) |
 | 0x329A18 | 0.01 | re-anchor eye-move scale (M20) |
 | 0x40466666 | 1.5 | re-anchor loop scale (M20) |
 | 0x32B15C | 0.3 | auto-run stop cross-y (M6) |
@@ -463,10 +490,10 @@ is in [target_track.md](target_track.md) §6.
 | M14 | [local] | Live position ent+0xD4/+0xD8/+0xDC; contact fields +0x5A0/+0x5AC/+0x5B0 | §7 |
 | M15 | [local] | Q/E turn keys rotate camera (cam+0x48 += tick·axis6·0.10666667, 0x1F0F2..0x1F147) and body (heading re-assign + SetDir 0x1E2F0, 0xA68D2..0xA6998) | §10 |
 | M16 | [local] | Device 0x3F actions: 4=W/S, 5=A/D (inverted), 6/7=Q/E pair; discrete 0xA9=Q, 0xAA=E | §10 |
-| M17 | [local] | Pitch: tick x 6.0, clamps 23.0/10.0 (0x32A3D8/0x32A3D4); both keys ease to 15.0 x 0.25/frame, sticky byte 0x10456D84 | §11 |
+| M17 | [local] | Zoom/focal: ±tick·6.0 (0x32A3E8), clamps 900.0/242.0 (0x32A3D8/0x32A3D4); both keys snap to 350.0 via byte 0x10456D84; wheel same path; store 0x15290→cam+0x2F8 (old M17 "pitch 23/10/15" was a XIClient leak — §11) | §11 |
 | M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; angle expression FPU-underflowed | §11 |
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
-| M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard digital = 127/64 (1/64 scale @0x32A778); held Q/E = 0.211667 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
+| M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); held Q/E ≈ 0.1058 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
 
 ## 15. Kuluu conclusions (for the walker rework)
 
@@ -481,10 +508,14 @@ is in [target_track.md](target_track.md) §6.
 - Q/E is a turn key pair, not a strafe: it integrates the camera azimuth (M15)
   and re-assigns the body heading so the body keeps facing travel (M15). A
   kuluu Q/E that orbits the camera and rotates the body is retail-shaped.
-  Ported to kuluu (view_native/input.rs): held Q/E orbit 0.211667 rad/s
-  (~12.1 degrees/s, M15/M20); pitch 6.0 degrees/s with the both-keys ease to
-  15.0 at factor 0.25 (M17); the left/right arrows have no retail rate in
-  this build (M19) and are set to the pitch rate.
+  Ported to kuluu (view_native/input.rs) — **two ports are wrong, flagged for
+  a user decision**: (1) held Q/E orbit was ported at 0.211667 rad/s
+  (~12.1°/s); retail is ≈ 0.1058 rad/s (~6.1°/s, M15/M20) — the port is 2×
+  too fast; (2) "pitch 6°/s, clamp 23/10, both-keys ease to 15" was ported
+  from the pre-correction M17 — the real M17 is **focal-driven zoom** (±6.0
+  focal/s, clamps 900/242, both keys snap to 350, M17); it is zoom, not
+  pitch, and needs replacement, not tuning. The left/right arrows have no
+  retail rate in this build (M19).
 - Spring-back exists in retail (M18) but its reference-angle expression is not
   decodable (FPU stack underflow); documented, not ported.
 - Airborne movement is quartered (M8); contact with another player within ≈6.3 yalms
@@ -499,5 +530,5 @@ is in [target_track.md](target_track.md) §6.
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
 - The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.
 - Spring-back reference-angle expression (M18): FPU stack underflow at 0xA692A..0xA6936.
-- The both-pitch-keys ease byte (M17) is sticky until a camera reset; no release path found.
+- Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).
 - Fn 0x20446 (countdown = 20.0 @0x20769) has 0 direct callers - presumably vtable-dispatched.
