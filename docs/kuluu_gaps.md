@@ -1,0 +1,75 @@
+# What kuluu is missing, against everything the DLL passes have verified
+
+Purpose: the single list of deltas between **retail as proven in `FFXiMain.dll`** (RVA-cited) and **what kuluu's
+working tree actually does today** (file:line cited). Nothing here was changed — research-only; every kuluu line
+was read this session, including the 7 modified-but-**uncommitted** files on branch `jw-stack-815`.
+
+Statuses: **done** = matches a verified rule · **partial** = right idea, wrong/unverified numbers or half-mechanism ·
+**missing** = no code path · **bug** = demonstrably mis-reads data.
+
+> Ground rules inherited from [summary.md](summary.md) §0: retail is king; byte-verify or don't write it; a delta
+> that doesn't unblock S1–S4 isn't progress.
+
+## A. Head / neck look-at — symptom **S3** ([lookat.md](lookat.md))
+
+| # | Verified retail rule (RVA) | kuluu today | Gap | Status |
+|---|---|---|---|---|
+| A1 | Look point = target's **attach point 3** (`[vt+0x1C4](3)`), `y −= 1.2f` when `target+0xB2 ≠ 0`, stored at actor+0x848 ([lookat.md §B](lookat.md)) | entity world position + hardcoded `TARGET_LOOK_HEIGHT = 1.4`; resolution by entity id only — no bone/reference lookup (`ffxi_actor_render.rs:4717-4737`, `:4781`) | per-model head point instead of one global height; the `+0xB2` variant unmodelled | missing |
+| A2 | Release is **positional, never angular**: horiz ≤ **0.3f** (`.rdata 0x32B15C`) or actor-local forward component ≤ **−0.5f** (`0x32A3D0`), forward = +X ([lookat.md §B](lookat.md)) | one angular cone test `POSE_FORWARD.dot(look) < HEAD_VIEW_CONE_COS (-0.30 ≈ 107°)` (`ffxi_actor_render.rs:3243`, used `:3250`) | wrong shape (cone vs two positional cuts) and invented threshold; distance term absent | bug |
+| A3 | Two-stage settle: blend weight `model+0xBC` ramps **±0.04/frame** (`0x32A85C`; ~25 frames, reset straight-ahead at 0), *and* the look point chases **1/32 of remaining distance per tick** (push `0x3D000000` @`0x2AD71`) ([lookat.md §B/§E.1](lookat.md)) | single exponential slerp, `alpha = 1−exp(−frames/HEAD_SLEW_TAU_FRAMES)` with tau **6 frames**, invented (`ffxi_actor_render.rs:3245`, applied `:3227-3230`) | one smoothing where retail has weight × chase; no reset-to-straight at weight 0 | partial |
+| A4 | The limit is a **per-model authored ellipse** `{xlim, ylim, scale}` in skeleton chunk kind **`0x29`** at `refs_end + 0x48`, stride 12 (accessor `0x35270`); humanoid head `(0.24, 0.16)`, neck/shoulder `(0.16, 0.06)`; **zeros ⇒ that bone does not bend** ([lookat.md §E/E.3](lookat.md)) | one hardcoded clamp `HEAD_MAX_TURN_RAD = 1.20 rad ≈ 68.8°` (`ffxi_actor_render.rs:3244`) applied identically to every model/race | no data load at all; per-model variety (539/310/22 vs 2,488 zero-authoring) invisible | missing |
+| A5 | Bend applies **record[0] on the head bone and record[1] on neck/shoulder** — second bone dropped when status predicate `0x84390` returns `{0x30} ∪ {0x3F..0x53}` (`0x2AE0D..0x2AEBB`) | one joint (`find_head_neck`, derived by heuristic from hand references 126/127 + parent chains, `ffxi-actor/src/skeleton_instance.rs:357`) rotated **rigidly over its subtree** (`apply_head_look` `:428`) | no shoulder share as a second, smaller ellipse; head index computed rather than authored; rigid subtree ≠ two independently limited bones | missing |
+| A6 | Look-at gated by target status ∈ {0,1,2,6,7,8} and own status ∈ {0,0x2F,0x30}/mount preds; scheduler stage `0x89` bit 2 suppresses it (watchdog ends on ≥1.0 moved or authored duration) ([lookat.md §B](lookat.md)) | no gate: if a target id resolves, the head aims (`ffxi_actor_render.rs:4717-4737`) | sitting/resting/locked-animation states keep aiming; nothing consumes the `0x89` stage here | missing |
+| A7 | *Data correctness*: those limit records sit **inside** what kuluu currently parses as bounding boxes — replaying `ffxi-dat/src/skel.rs:129-141` on `hum_` (`ROM\125\74.DAT`) yields **5** "bounding boxes", #4 = `[0.24, 0.16, 0.5, 0.16, 0.06, 0.5]`, #5 = limits + `CDCDCDCD` sentinel junk | same loop (`skel.rs:129-141`), consumed only by a diagnostic (`examples/actor-scan.rs:52`) | the section must be split: authored bboxes → real bbox list; `{xlim,ylim,scale}` records → look-at limits. Today kuluu throws them away *as garbage boxes* | bug |
+
+## B. Body / legs facing while strafing — symptom **S1** ([target_track.md](target_track.md), [movement.md](movement.md))
+
+| # | Verified retail rule | kuluu today | Gap | Status |
+|---|---|---|---|---|
+| B1 | Facing = direction of travel: `yaw = −fpatan(dir.z, dir.x)` → `actor+0xE8` (M10); parallel-move-vs-target branch `0xA7B80` derives facing from **axes** (T8: `−atan2(axes.y, axes.x)` for states 2/4 with predicates, else `−atan2(−n.x, −n.z)`) | heading = travel heading instantly, deliberately no turn rate / no shortest-arc (`input.rs:1576-1611`, comment `:1601-1605`) ✓ matches M10 for free-run | the *parallel-move* branch is not reproduced from `0xA7B80` — its axis provenance is still an open item there (§2 note, §9) | partial |
+| B2 | Lock-on does **not** turn the body; squaring happens on the first move (`lock_aimed`, one-shot per target — matches the rule Shane set after in-game check) | exactly that: one-shot `heading = heading_for_angle(bearing)` guarded by `locals.lock_aimed != Some(id)` (`input.rs:1616-1625`, reset `:1445-1449`) | — (matches the agreed behaviour; not a DLL-proven rule) | done |
+| B3 | Strafe step taken along body-right (`heading + 64` u8) | same (`input.rs:1671-1676`; locked input fold `resolve_move_inputs` `:281-312`) | — | done |
+| B4 | "Force the body toward the target while strafing" (the parked fix, `C:\MissingPR`) | **not in tree** (damped `lock_bearing` was removed with the WIP edit) | *No DLL backing*: retail facing is axes/travel-derived (B1), and the ±44.987° bracket + 0.125 ease are **inert in this build** (T15/T3). Decision needed: reproduce `0xA7B80` properly, or keep one-shot squaring — do not silently ship the parked patch as "retail" | open decision |
+
+## C. Camera zoom / spring / leash — symptom **S4** ([movement.md](movement.md) M17/M18, [camera.md](camera.md))
+
+| # | Verified retail rule | kuluu today | Gap | Status |
+|---|---|---|---|---|
+| C1 | Zoom is a **focal length**: `focal += ±tick × 6.0`, clamped **242..900**, both-keys-held eases ×**0.25 toward 350**; `FOV = 2·atan(192/focal)` → band ≈ **[24.1°, 76.7°]**, neutral 57.5° | free FOV window: `MIN_DEG 28`, `MAX_DEG 90`, `RATE_DEG_PER_SEC 30` (`kuluu-render/src/camera.rs:239-244`), PgUp/PgDn + `.`/`,` (`input.rs:1154-1173`) | top of band exceeds retail by ~13°; no focal clamp; no ease-to-neutral; deg/s not derived from tick×6 (the tick semantics themselves need re-checking — see [summary.md §3](summary.md) on the stale `0x32A22C` 1/32 cite). kuluu already carries the right constants to do this properly (`RETAIL_PROJECTION_HALF_HEIGHT 192`, `RETAIL_DEFAULT_FOCAL_LENGTH 350`, derived `DEFAULT_FOV_DEG` — `graphics/settings.rs:830-850`) | partial/bug |
+| C2 | One keyboard-axis scale for camera aim (1/128, M20); **L/R arrow path is dead in this build** (M19) | yaw = `ROTATE_KEY_ORBIT_RAD_PER_SEC ≈ 1.693 rad/s` (base 0.1066667 × axis 127/**64** × client-scale **8.0**, labelled playtest-calibrated, `input.rs:143-158`) and pitch = `0.8378 rad/s` (`input.rs:166-169`) | yaw is exactly 2× pitch because of the 127/64 axis term — matches Shane's "L/R way too fast vs up/down"; and an arrow-key rate cannot be retail when that path is dead | partial (numbers unverified) |
+| C3 | Mouse aim: base rate + faster toward screen edges [O] | flat `MOUSE_YAW_SENS = MOUSE_PITCH_SENS = 0.005 rad/px`, no acceleration (`kuluu-render/src/mouse.rs:9-11`) | edge response curve missing (also the likely source of C2's mismatch: base taken for the keyboard path) | missing |
+| C4 | Re-anchor only while a movement key is held (M11); spring-back via mode byte `0x456DB0` + reference angle `0x456DB4` (M18) | gap-proportional capped spring `spring_toward()`, `CAM_PULL_RATE 2.0`, `CAM_MAX_SPEED 12.0` (`camera_collision.rs:18-47`), gated by setting `camera_spring` (default true); leash dead-zone with invented slack ratio `LEASH_SLACK_MIN_RATIO 0.5` (`:61`) | pull/limb/slack constants are not DLL-derived; M18's mode byte/reference-angle pair is unread — that is the "steak" for the spring, not another constant guess | partial (knobs OK, values not retail) |
+| C5 | Leash as a debug feature | `camera_leash_yalms` default **0.0**, step 0.1, Debug-menu row `Camera_leash`, ±0.1 editing (`graphics/settings.rs:841-842`, `hud/menu.rs:346-350`, `text_input/menu.rs:850-864`) | — (Shane's requested default 0.0 is in the tree) | done |
+
+## D. Animation: idle↔walk seam + drive-task substrate — symptom **S2** ([summary.md §6](summary.md))
+
+| # | Verified retail rule | kuluu today | Gap | Status |
+|---|---|---|---|---|
+| D1 | Motion = key channels (time-keyed) + frame channels (fixed-rate), linear interpolation, **mixer motions may nest**; 5 base layers sampled into a per-bone scratch (slot 4 first → slot 0 last), 2 blend layers mixed by weight (`Quat_NLerp` rotation un-renormalised, `Vec3_Lerp` translation/scale), a per-bone mask deciding whether a new motion interrupts or queues (`MotionQueue_ApplyPolicy`) | 8 slots (clip-id digit) + cross-slot fade; the **incoming clip always restarts at frame 0** (`clone_context_at_frame0`, `ffxi-actor/src/animation.rs:478`) and the outgoing half becomes a *frozen snapshot* (`AnimationSnapshot` `:245-287`); per-bone masks/policy absent | this is the seam: gait clips restart rather than continue from shared keys; blending exists only on composite transforms, never at channel level (`get_joint_transform` = key index + adjacent lerp, `ffxi-dat/src/skel_anim.rs:34-50`) | partial (root cause untouched) |
+| D2 | Same-clip re-request is a no-op (XIM `setNextAnimation`) | now handled two ways: animator-level only for `low_priority` idle (`animation.rs:420-422`), plus per-slot `(id, battle set)` skip added in the **uncommitted** WIP (`ffxi_actor_render.rs:1351 registered_slots`, gates at `:3079-3081`, `:3140-3142`) + hemisphere-aware long-arc nlerp helpers (`animation.rs:15-64`, uncommitted) | both are band-aids that stop *re-registers*, not clip restarts; also currently sitting **uncommitted** — they need their own commit before D1 work lands on top | partial (WIP, uncommitted) |
+| D3 | Scheduler drive-tasks: dispatch `case = type − 2`; stage `0x89` LockLookAt(duration only), `0xA9/0xAA` ActorRotation(pitch,yaw,roll°,duration); tasks tick against the joint integrator (`angle += dt × curve`, wrap ±π) | no `StageKind` for **0x89 / 0xA9 / 0xAA** at all — `ffxi-dat/src/scheduler.rs:488-590` has zero hits, so they decode to `Unknown` and are only counted by the coverage census (`scheduler_runtime.rs:919-927`, `report_effect_coverage` `:1363`) | the whole B substrate (opcode → task → joint integrator) is missing; kuluu's nearest thing is a cutscene helper `look_at_rotation` (`scheduler_runtime.rs:2923`) — and XIM reads 0x89 as something else entirely, so our own decode stands alone | missing |
+| D4 | Authored-float carriers not yet read consumer-side: stage `0x28` (6,234 records; float ∈ {30,24,20,10,60,36,15}) and `0x62` (always `(u16,u16)+45.0f`) | `0x28` maps to `TransitionToIdle`, undispatched; `0x62` unknown → counted only ([drivetask.md §9.5b](drivetask.md)) | both are candidates for gait/idle-transition data feeding D1 — read the handlers, not another census | missing |
+
+## E. Order I'd take, and how each step gets verified in-game
+
+Nothing below needs more DLL work first except B4/C2/C4 (named reads). Each row is one commit, Shane tests between them.
+
+| order | change | verify by |
+|---|---|---|
+| 1 | **Fix `skel.rs` section split (A7)** — stop the bbox loop where the authored boxes end; expose `{xlim,ylim,scale}` records (`refs_end+0x48`, stride 12). No behaviour change outside tests/pin-values. | unit test on `hum_`: limits == `(0.24,0.16,0.5)`,`(0.16,0.06,0.5)`,`(0,0,0.5)`; the bbox list no longer contains a box made of limit floats nor any `CDCDCDCD` group (today it returns 5, two of them junk); `examples/actor-scan.rs` real boxes unchanged |
+| 2 | **Replace the head-look model (A1+A2+A3)** — attach-point look point, positional release (0.3 / −0.5 forward), weight ±0.04/frame × 1/32 chase; delete `HEAD_VIEW_CONE_COS`/`HEAD_MAX_TURN_RAD`/`HEAD_SLEW_TAU_FRAMES`. | walk past a mob: head tracks, snaps back straight when it passes behind the shoulder line (~25-frame settle, not a jump); no change at 90° to target; standing vs walking identical |
+| 3 | **Ellipse from data + second bone (A4+A5)** — apply each record as an ellipse in that bone's tangent plane on head *and* neck/shoulder, mode→1 bone for the status set. | hume (0.24/0.16) vs orc (0.1/0.1): visibly different limits; shoulder follows slightly and stops earlier than the head; zero-authoring models (most mobs) show no head bend at all |
+| 4 | **Gates + `0x89` suppression (A6)** — status sets, LockLookAt stage bit/watchdog. | sit / event / mid-action: head freezes then resumes after you move ≥1 yalm or the duration ends; Goblin/Tarutaru question resolved in-game ([O?] flag in [lookat.md §E.3](lookat.md)) |
+| 5 | **Focal zoom (C1)** — focal 242..900 with ease-to-350, FOV derived through `2·atan(192/f)`; drop the free 28..90 window. | zoom sticks retail's range at both ends and drifts back to neutral when both keys are held |
+| 6 | **Camera aim rates (C2+C3)** — one axis scale for yaw/pitch, mouse edge curve; then re-tune. Until a DLL pass lands, keep the constants but *label* them non-retail in code as they already are. | L/R and up/down feel symmetric; mouse accelerates near edges |
+| 7 | **S2 seam (D1)** — continue gait clips from current keys instead of restarting; then D3 drive-task substrate. | idle↔walk/run has no pop, legs keep stepping through an engage flip; `H` spam while strafing no longer freezes the strafe animation |
+| 8 | **S1 parallel-move (B1/B4)** — finish `0xA7B80` provenance and implement it as authored. | circle-strafing a mob: legs follow travel, weapon/body stay square the way retail does, upper body ≠ legs direction never happens |
+
+## F. Open decisions for Shane (blocking only rows B4 / C2 / 3rd step detail)
+
+1. **B4**: reproduce `0xA7B80` properly (more DLL reading; its axis provenance is unfinished), or keep the agreed
+   one-shot squaring and drop the parked force-toward-target patch? The DLL evidence says facing follows axes/travel,
+   so shipping "force toward target" as *retail* would be a false citation — your call, but the docs have to say which.
+2. **C2**: where should arrow-key camera rates come from at all, given M19 proves that path dead in this build?
+3. **A5**: `find_head_neck`'s hand-reference heuristic gets replaced by authored reference indices — confirm it's fine to
+   change head/neck bone selection semantics for *all* models (it will move the pivot on non-humanoid rigs).
