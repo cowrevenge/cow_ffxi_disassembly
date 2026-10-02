@@ -31,6 +31,20 @@ doesn't unblock one of S1–S4 is not progress.
 inference as inference; if the answer lives in DAT data rather than `.rdata`, say so early instead
 of guessing numbers.
 
+### Oracles available (things that can answer us without guessing)
+
+| Oracle | What it gives | Trust posture |
+|---|---|---|
+| **Our unpacked `FFXiMain.dll`** (TDS 0x6A995428) | the only thing that is ground truth for *this* build | [V] after bytes are read |
+| **Live client observation** ([O]) | what retail *looks like*, which sets acceptance criteria | never explains mechanism; drives S1–S4 pass/fail |
+| **WGINC/DancingMad** @ 4243c7e — their master `FINDINGS.md` + pipeline map (see [dancer_engine.md](docs/dancer_engine.md)) | names, class hierarchy, module census, struct shapes, vtable slot meanings | **[web]** — older PC build + PS2; RVAs unusable |
+| **PS2 `SCUS_972.66` DWARF v1** (Dec-2003 disc) | 2,758 named types with **every member name/offset/type**, 12,227 function symbols, 1,936 named `sq*` functions ⇒ *member names for our unnamed offsets* | [web]; PS2 renames this layer (`Kz*`/`Ym*`), and PC-only classes like the DriveTasks may have no DWARF counterpart |
+| **Their independent C++ reconstruction** + `ps2_dwarf_tools.zip` (DWARF-1 parser, class indexer, JSON type export) | third-party cross-check on any struct claim | [web] |
+| XIClient source | navigation only | already demoted ([§3](#3-bad-leads-found)) |
+
+Discipline adopted from DancingMad: **names that came from IDA/Lumina similarity are hints, not
+evidence** — a 33-byte body match is not a symbol.
+
 **Builds.** M/T/J were cut against TDS **0x6A995428** (retail-2026-09, the current
 install). F/C/E were cut against TDS **0x6A7297F5** (older). RVAs are build-specific; a
 few global addresses moved between builds (noted inline). Every RVA in the pass docs is
@@ -117,6 +131,26 @@ not just a number.
   `sqHierarchy/sqhiNode`, `sqSkeleton/sqskJoint`, `sqModel/sqmdModel` (**`sqmdModelLookAt()`
   takes a `<boneNdx>`, range-checked**), `sqOpcode` (matches F-pass stage stream). Full table in
   [drivetask.md](docs/drivetask.md) §1.
+- **DancingMad ingest — the `dancer` module census reproduces independently [V vs web ✓].**
+  Our own scan of `__FILE__` strings gives **16 modules / 84 source paths** ([tools/our_modules.py](../tools/our_modules.py));
+  their per-module file counts match on sqModel(7), sqMotion(12), sqSkeleton(3), sqHierarchy(1),
+  sqImage(5), sqConstraint(1), sqDeform(1). One known mismatch: `sqSkin` files (theirs 5, ours 4).
+  Full map in [dancer_engine.md](docs/dancer_engine.md) §1.
+- **DancingMad class names verified present in OUR build [V].** Every name they rely on exists in
+  our descriptor table with sizes: `CMoLockLookAtDriveTask` 0x80, `CMoActorRotationDriveTask` 0xA0,
+  `CMoSchedularTask` 0x14A, `CMoSkeletonElem` 0x1D9, `CXiActorDraw` 0x34, the four-level actor
+  chain (Atel/Control/Collision/Skeleton = 0xD4/0x5C4/0x5F8/0xA0C), `CYyMotionQue` 0x40, `XiZone`
+  0x1DC ([tools/xcheck_dmad.py](../tools/xcheck_dmad.py)). Their recovery method — `class_descriptor_t`
+  nodes in `.rdata` — is the same structure our D pass found independently.
+- **Their actor vtable slot map, if it holds in our build, hands us S1's home [web].** Per-actor PC
+  draw hook = **slot 162** (not slot 8); slots **195–209** are the movement/animation lock queries
+  (`IsControlLock`, `IsDirectionLock`, `IsConstrain`, `IsFreeRun`, `IsWalkLock`, `IsParallelMove`);
+  slot 8 = per-frame update. Verify before coding against it.
+- **Their blending account is the leading hypothesis for S2 (idle↔walk seam) [web].** Pose scratch
+  filled by **5 base layers (slot 4→0, lower wins) + 2 blend layers** (`Quat_NLerp` rotation,
+  `Vec3_Lerp` translation/scale), gated by a per-bone byte mask (bit 6 = touched by a base layer this
+  update; bit 7 = bone accepts blends), same bits deciding interrupt-vs-queue. ⇒ retail *masks and
+  blends per bone* rather than restarting the whole pose.
 - **Key globals [V]:** entity table (0x480AF0 @ 0x6A995428 / 0x480B30 @ 0x6A7297F5,
   stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
   clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
@@ -327,6 +361,12 @@ still open:
 
 1. the head's **6-bit joint index** and its constant table (saturation = limit, velocity = slew);
 2. the **per-joint param struct** `{index, scale@+4, scale2@+8}` (the head's `scale`).
+
+**Open conflict worth settling early.** DancingMad reports `sqmoKeyChannel`'s interpolation enum
+(`1`=Linear, `2`=Smooth) as *never exercised* in their retail build, while our J pass found two
+quadratic "smooth" curve evaluators (`0x547A0`, `0x546F0`) with 46 and 26 call sites. Probable
+resolution: motion-channel interpolation ≠ the joint-drive curves J pass saw (matches the J/D layer
+split), but **our build needs a caller census to say so**. Until then nobody quotes either claim.
 
 A **separate look-at/aim controller** is not ruled out, but its old lead was bogus: the
 "double-fpatan sites" **0x5EA03 / 0x5EF03** are `xor eax, eax` linear-sweep artifacts (J11).

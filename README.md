@@ -73,6 +73,8 @@ Two builds were dissected (RVAs are **build-specific**):
 | E | [docs/event_vm.md](docs/event_vm.md) | The cutscene event VM (opcodes, waits, camera/UI interplay) |
 | U | [docs/ui.md](docs/ui.md) | Event UI/HUD and dialog control |
 
+| — | [docs/dancer_engine.md](docs/dancer_engine.md) | **External ingest** (tier `[web]`): WGINC/DancingMad @ 4243c7e — the `dancer` module census, class map and pose/skinning leads, each tagged with whether we verified it in our build; plus our oracle list (PS2 DWARF etc.) |
+
 Supporting material: [event_evidence.md](docs/event_evidence.md) (raw evidence
 dumps for the E pass), [event_opcode_table.md](docs/event_opcode_table.md),
 [mob_evidence_1..3](docs/mob_evidence_1_modmap_anchors.md) (F-pass evidence),
@@ -99,7 +101,10 @@ Requires: `pip install pefile capstone`.
   (`{name,size,parent}`) and locate a class's vtables via its RTTI accessor thunk.
 - `tools/dt_consts2.py`, `tools/who_makes_tasks.py` — constant/sink scan over a code range and
   group of `.text` references to a table range (the D pass evidence).
-- `tools/srcpaths2.py` — dump the embedded `C:\dev\dancer\…` build paths (module inventory).
+- `tools/srcpaths2.py`, `tools/our_modules.py` — dump / tally the embedded `C:\dev\dancer\…`
+  build paths (our own module census: 16 modules, 84 source-file paths).
+- `tools/xcheck_dmad.py` — check that a list of class names exists in our descriptor table
+  (used to verify every DancingMad name before repeating it).
 - **Gotcha for any new scanner:** in this unpacked image *file offset == RVA*; do not add
   ImageBase when indexing the buffer, and always disassemble with `skipdata=True`.
 - `session_out/` — the 2026-10-02 cloud-session artifact zips (ffximain_tables_v0,

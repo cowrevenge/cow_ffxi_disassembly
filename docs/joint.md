@@ -348,7 +348,13 @@ the user. Citation form for those edits: `FFXiMain.dll retail-2026-09 RVA 0x...`
 
 **Open items (where the actual numbers are):**
 
-- **The head's limit/slew/tug values** are in the **authored per-class keyframe curve
+- **Primary lead is no longer inside this pass.** The overlay classes that rotate actors toward
+  things are now *named and located* in our build — `CMoLockLookAtDriveTask` (0x80, vtable
+  `.rdata 0x32BA18/0x32BA34`) and `CMoActorRotationDriveTask` (0xA0), with degree-denominated
+  rotation inputs ([drivetask.md](drivetask.md) §3–§5, cross-checked against DancingMad in
+  [dancer_engine.md](dancer_engine.md) §2–§3). Reading **their constructors' callers** should expose
+  the limit / duration / degree magnitudes as arguments. The curve-data route below is now secondary.
+- **The head's limit/slew/tug values (secondary)** are in the **authored per-class keyframe curve
   data** (the (x,y) points of the head's table) and/or the **per-joint param scales**.
   To extract them: identify the head's 6-bit joint index and its constant table, then
   read the curve's saturation (limit), velocity scale (slew), and the body's fraction
@@ -363,7 +369,10 @@ the user. Citation form for those edits: `FFXiMain.dll retail-2026-09 RVA 0x...`
   angle at `[obj+0x94]`).
 - **0x3138BA helper's exact transform** (J3).
 - **Smooth-curve polynomial basis** (§2) — the *branch selection* is settled (§8a: `jp` ⇒
-  u ≥ 0.5); what is not yet pinned down is the exact quadratic basis of each branch.
+  u ≥ 0.5); what is not yet pinned down is the exact quadratic basis of each branch. Note the
+  conflict with DancingMad's claim that motion-channel "Smooth" interpolation is never exercised:
+  these evaluators have 46/26 call sites in our build, so a caller census must decide whether they
+  belong to joint drive-curves (this pass) or keyframe channels ([dancer_engine.md](dancer_engine.md) §4).
 - **The per-entity update (0x8F000..0x93500)** was only scanned for FPU const compares
   (none found); a full decode of its target-direction handling is not done.
 - **Instance identity** of the 0x69F90 clock writer and the 0x47BFA8 global (J5 note).
