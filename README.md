@@ -69,6 +69,7 @@ Two builds were dissected (RVAs are **build-specific**):
 | F | [docs/mob_animation.md](docs/mob_animation.md) | The animation driver: 0x0E/0x28 → RenderFlags → actor → routine → stage stream |
 | T | [docs/target_track.md](docs/target_track.md) | Target acquisition and target-track steering |
 | J | [docs/joint.md](docs/joint.md) | The skeleton joint layer: per-joint velocity-curve integrator |
+| D | [docs/drivetask.md](docs/drivetask.md) | The **DriveTask** overlay layer (`CMoLockLookAtDriveTask`, `CMoActorRotationDriveTask`): how an actor is *driven* to look/turn, plus the `dancer` module map and Square's class-descriptor format |
 | E | [docs/event_vm.md](docs/event_vm.md) | The cutscene event VM (opcodes, waits, camera/UI interplay) |
 | U | [docs/ui.md](docs/ui.md) | Event UI/HUD and dialog control |
 
@@ -92,6 +93,15 @@ Requires: `pip install pefile capstone`.
 - `dat_routines.py`, `ffxi_dat_find.py`, `scene_dat_parse.py`,
   `probe_tpc_files.py`, `assemble_event_evidence.py` — model/scene DAT and
   TPC package tooling.
+- `tools/mask_census.py` — census of the `fnstsw ax` → `test ah,imm8` idioms over `.text`
+  (the x87 flag-test ground truth used by [docs/joint.md](docs/joint.md) §8a).
+- `tools/rtti_graph.py`, `tools/find_vtbl2.py` — parse Square's class descriptors
+  (`{name,size,parent}`) and locate a class's vtables via its RTTI accessor thunk.
+- `tools/dt_consts2.py`, `tools/who_makes_tasks.py` — constant/sink scan over a code range and
+  group of `.text` references to a table range (the D pass evidence).
+- `tools/srcpaths2.py` — dump the embedded `C:\dev\dancer\…` build paths (module inventory).
+- **Gotcha for any new scanner:** in this unpacked image *file offset == RVA*; do not add
+  ImageBase when indexing the buffer, and always disassemble with `skipdata=True`.
 - `session_out/` — the 2026-10-02 cloud-session artifact zips (ffximain_tables_v0,
   ffximain_claims_v1, ffximain_headless_v1): unpacker + tables, claims CSV +
   corrections, labels/functions/decomp for the current build. Inputs to the

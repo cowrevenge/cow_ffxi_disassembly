@@ -7,8 +7,29 @@ parity ("retail is king, dll is king"). Each section cites the pass that verifie
 Passes: **M** = [movement.md](docs/movement.md) (walker), **C** = [camera.md](docs/camera.md)
 (event camera), **F** = [mob_animation.md](docs/mob_animation.md) (animation driver), **T** =
 [target_track.md](docs/target_track.md) (target-track), **J** = [joint.md](docs/joint.md) (skeleton
-joint layer). Conventions (RVA base 0x10000000, POL1-packed `.text`, evidence tiers) in
-[../README.md](README.md).
+joint layer), **D** = [drivetask.md](docs/drivetask.md) (overlay DriveTask layer). Conventions
+(RVA base 0x10000000, POL1-packed `.text`, evidence tiers) in [../README.md](README.md).
+
+## 0. WHY we are digging (do not lose this)
+
+We dig `FFXiMain.dll` for one reason: **kuluu's movement/animation feel is visibly wrong, and
+the user's standing ruling is "retail is king, dll is king" — no invented constants.** Each dig
+must pay for itself in a symptom the user can see in-game:
+
+| # | Symptom the user reported (paraphrased) | What the dig owes us |
+|---|----------------------------------------|----------------------|
+| S1 | While strafing a locked target, upper body/legs turn the wrong way; weapon vanishes with certain DAT choices | The retail rule for Head/Body/Legs/Weapon heading per state (no-target / target / locked), incl. "force toward target", not shortest-arc |
+| S2 | Idle↔walk shows a seam — same clip "restarting" instead of continuing from shared key points | How retail *stores and blends* keyframes (`sqmoKeyChannel`/`sqmoMixerMotion`), i.e. overlap/blend, not clip restart |
+| S3 | Head looks at the target to a limit then **snaps back straight**; body tugs slightly L/R; head turns on target change | The actual mechanism + numbers for limit / slew(reset) / tug — now believed to be **authored degree values fed to a DriveTask**, not a clamp constant |
+| S4 | Camera spring/leash feel (loaded by movement, pinned behind, catches up), and locked-camera catch-up ≤1 s bounded so it never swings past the player | Retail's spring/re-anchor law + its constants (M11/M15/M17/M18; leash value still not dll-verified) |
+
+**Acceptance test for any of these:** a kuluu build the user can drive — press keys, watch the
+character — where the symptom is gone *and* nothing else regressed. A doc-only conclusion that
+doesn't unblock one of S1–S4 is not progress.
+
+**Guardrails learned the hard way:** never quote a value we haven't read from bytes; label
+inference as inference; if the answer lives in DAT data rather than `.rdata`, say so early instead
+of guessing numbers.
 
 **Builds.** M/T/J were cut against TDS **0x6A995428** (retail-2026-09, the current
 install). F/C/E were cut against TDS **0x6A7297F5** (older). RVAs are build-specific; a
@@ -22,8 +43,8 @@ from verified parts; **[O]** = user's retail observation.
 
 ## 1. What we are looking for
 
-The immediate target (carried from the T-pass handoff): the retail constants behind the
-head/target-look behavior, to replace kuluu's hardcoded model
+(This section predates §0 and is kept for continuity; §0 is authoritative.) The immediate
+target: the retail mechanism + numbers behind head/target-look, to replace kuluu's hardcoded model
 (`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`, `HEAD_SLEW_TAU_FRAMES` in
 `kuluu-render/src/ffxi_actor_render.rs` ~3241, plus the state-2 body behavior in
 `kuluu/src/view_native/input.rs`):
@@ -75,6 +96,27 @@ not just a number.
 - **J pass — a real atan2 site at 0x5EA7F..0x5EA93 [V] (J11).** `faddp`/`fsqrt` then
   `fpatan` and `fsubr dword [esi+0x94]`: an object angle minus the atan2 of two locals, i.e.
   a plausible look-at/aim computation. The current lead for §9.
+- **D pass — the overlay mechanism itself: `CMo*DriveTask` [V].** The pose is not just
+  animated; it is *driven*. Tasks: `CMoLockLookAtDriveTask` (0x80),
+  `CMoActorRotationDriveTask` (0xA0), `CMoActorColorDriveTask` (0x88), `CMoLockColorDriveTask`
+  (0x7C), `CMoPathDriveActorTask` (0xB0) — siblings of `CMoSchedularTask`, located via Square's
+  own class-descriptor records (`{name,size,parent}`, 425 parsed) and the RTTI accessor thunks
+  that sit *in* their vtables. **This is the answer to "is look-at part of the animation or
+  layered on top": layered on top, by a named per-task overlay.** [drivetask.md](docs/drivetask.md)
+- **D pass — rotation in this layer is authored in DEGREES [V].** `0x1032A9F4 = 0.0174527783`
+  (π/180) is referenced *only* inside `CMoActorRotationDriveTask` (0x5FA95, 0x5FABB, 0x5FACB).
+  Its update at **0x5FB30** lerps a from-tuple (`+0x80/+0x84/+0x88`) to a to-tuple
+  (`+0x90/+0x94/+0x98`) gated by a mode byte `+0x7c` ∈ {0,1,2} and a countdown `+0x74` against the
+  J-pass clock dt — offsets consistent with its descriptor size 0xA0. Prime hunting ground for
+  the S3 limit/slew/tug values as *arguments*.
+- **D pass — two different angle-wrap conventions exist [V].** DriveTask layer wraps with
+  `6.283` (0x10329D2C, deliberately inexact) and `±3.1415`; J pass's integrator uses exact ±π/2π
+  (`0x32A3B0/B4/B8`). Parity work must not assume a single wrap constant.
+- **D pass — the middleware is named [V].** Embedded build paths expose Square's *dancer*
+  modules: `sqMotion` (sqmoKeyChannel / sqmoMixerMotion ⇒ keyframes + blending for S2),
+  `sqHierarchy/sqhiNode`, `sqSkeleton/sqskJoint`, `sqModel/sqmdModel` (**`sqmdModelLookAt()`
+  takes a `<boneNdx>`, range-checked**), `sqOpcode` (matches F-pass stage stream). Full table in
+  [drivetask.md](docs/drivetask.md) §1.
 - **Key globals [V]:** entity table (0x480AF0 @ 0x6A995428 / 0x480B30 @ 0x6A7297F5,
   stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
   clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
@@ -275,11 +317,15 @@ head look-at curve.
 
 ## 9. Where we are looking next
 
-**The head limit/slew/tug.** Per the J pass, these live in the **authored per-class curve
-table** (curve saturation = limit; velocity scale = slew) and/or the **per-joint param
-scale** (the prime tug factor). To extract them we need:
-1. the **head's 6-bit joint index** and its constant table (read the saturation +
-   velocity); and
+**The head limit/slew/tug — now with a better lead than "somewhere in the curves".** The D pass
+found the overlay layer that actually rotates actors toward things (`CMoLockLookAtDriveTask` /
+`CMoActorRotationDriveTask`, driven by degree-denominated authored values). **Top next step:
+read the callers of the construction sites** — LockLookAt `0x5F476/0x5F47F`, ActorRotation
+`0x5FA49/0x5FA4F` — because the limit / duration / degree magnitudes should appear there as
+arguments, and those callers are also where "lock-on happened" is decided. Secondary leads,
+still open:
+
+1. the head's **6-bit joint index** and its constant table (saturation = limit, velocity = slew);
 2. the **per-joint param struct** `{index, scale@+4, scale2@+8}` (the head's `scale`).
 
 A **separate look-at/aim controller** is not ruled out, but its old lead was bogus: the
