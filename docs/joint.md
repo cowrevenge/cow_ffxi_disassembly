@@ -38,6 +38,8 @@ ruled out (open item).
 | Q7 | What are 0x47BFA8 / 0x65CB14? | Resolved (J7): clock object (dt) / animation clock (curve param) |
 | Q8 | What is `[obj+0xE0]`? | Resolved (J9): a **generic** offset (222 sites), not a unique joint slot; the T-pass 13-site census was incomplete |
 | Q9 | The head's limit/slew/tug **numbers** | **Open**: in the authored curve data / per-joint param scales / a not-yet-found look-at controller; §9 |
+| Q10 | Is capstone's x87 table broken, and is the flag-test idiom resolvable? | Resolved (J10): capstone 5.0.7 correct (DB F8–FF genuinely invalid; FCOMIP = `DF F0+i`); all four `test ah,imm` masks decoded per SDM Table 3-21 — **C1/sticky bits are never involved**; §8a |
+| Q11 | The "double-fpatan look-at controller" at 0x5EA03 / 0x5EF03 | Resolved (J11): both are `xor eax, eax` linear-sweep artifacts — dead lead. Real angle site is **0x5EA7F..0x5EA93**; §8b |
 
 ## 2. The keyframe curve evaluators (J1)
 
@@ -78,11 +80,13 @@ Caller counts (E8 rel32 scan over decoded `.text`): 0x547A0 = **46**, 0x54500 = 
 0x546F0 = **26**, 0x544D0 = **23** — a **generic** mechanism used across the codebase,
 not head-specific.
 
-**J1 caveat (open).** The exact quadratic basis of the smooth branches and the
-segment-walk boundary conditions depend on the x87 flag-test idiom
-`fnstsw ax; test ah, 5; jp/jnp`, which tests the **sticky Inexact bit | C1** (ah bits 0
-and 2). The lerp (0x54500) and the "interpolated y at t" behavior are solid; the precise
-branch selection under the sticky-flag idiom is marked open.
+**J1 caveat — CLOSED (see §8a).** The branch structure of these evaluators was previously
+held open on the belief that `fnstsw ax; test ah, 5; jp/jnp` tested a *sticky exception bit*.
+It does not: mask `0x05` selects status bits **C0 and C2** (never C1), so under SDM Table
+3-21 `jp` means **not-below (≥)** and `jnp` means **strictly below**. Concretely, the smooth
+evaluators' compare against 0.5 (`fcom dword [0x10329A08]`, at 0x547E5 and 0x5473F) is taken
+iff **u ≥ 0.5**. What remains open is only the polynomial *basis* of each smooth branch, not
+which branch runs.
 
 ## 3. The joint dispatch stubs (J2) and the FPU helper (J3)
 
@@ -229,6 +233,107 @@ Globals:
 | 0x4568FC+0x28 | time scale/delta (read by 0x14CF0) |
 | 0x3D3810 | FPU-helper dispatch gate (0x31DD30) |
 
+## 8a. x87 ground truth: capstone is correct; the flag idioms are standard (J10)
+
+An earlier pass attributed its misreads to a *"corrupted capstone x87 table"*. **That claim
+is false and is withdrawn.** Re-verified against TDS 0x6A995428 with capstone 5.0.7, byte by
+byte (synthetic encodings *and* the real `.text` stream):
+
+| bytes | decode (correct, and what capstone emits) | note |
+|-------|-------------------------------------------|------|
+| `DE C1` | `faddp st(1)` | not "FST ST(1)" — FST ST(i) is `DD D0+i` |
+| `DD C1` | `ffree st(1)` | |
+| `D9 F3 / D9 F9 / D9 FA` | `fpatan` / `fyl2xp1` / `fsqrt` | |
+| `DB F8..FF` | *undecoded* | **genuinely invalid encodings** — `<undecoded>` is the right answer |
+| `DF F0+i` | `fcompi st(0)` (FCOMIP) | FCOMIP lives in `DF`, **not** `DB`; `DB F0+i` = `fcomi` |
+| `DA/DB C0..DF` | legacy Cyrix `fcmovcc` | capstone's output is correct |
+
+**Root failure mode = linear-sweep alignment, not opcode tables.** A decode started at a
+non-instruction offset drifts and lands on bytes that are not an instruction (typically the
+float constant pools interleaved near code). Capstone's `skipdata=True` recovers by itself;
+patching the decode tables would only inject wrong instructions. Nothing in M17/M20 or J1–J9
+is affected: those rest on `fcomp [mem]` / `fmul [mem]` / `fld` memory forms, which every
+capstone version decodes correctly.
+
+### The FCOM flag-test idioms (J10)
+
+SDM Vol 2A p. 3-377, **Table 3-21** (FCOM/FCOMP/FCOMPP results), quoted exactly — note that
+*Below* sets only **C0**, not C2:
+
+| condition | C3 | C2 | C0 |
+|-----------|----|----|----|
+| ST(0) > SRC | 0 | 0 | 0 |
+| ST(0) < SRC | 0 | **0** | **1** |
+| ST(0) = SRC | 1 | 0 | 0 |
+| Unordered | 1 | 1 | 1 |
+
+`fnstsw ax` puts status bits 8 / 10 / 14 into AH, so in MSVC codegen **AH bit0 = C0, bit2 =
+C2, bit6 = C3**; the masked byte's parity is then read through `PF`. A census of every
+`fnstsw ax` → `test ah, imm8` pair across `.text` (1,176,352 decode units) finds **exactly
+four** immediates, each with a clean standard meaning under Table 3-21:
+
+| mask | bits | sites | branches | meaning |
+|------|------|-------|----------|---------|
+| `0x05` | C0,C2 | 1455 | jp 1259 / jnp 174 | **jp = not-below (≥)**; jnp = strictly below |
+| `0x44` | C2,C3 | 400 | jp 210 / jnp 183 | **jnp = equal**; jp = above/below/unordered (≠) |
+| `0x41` | C0,C3 | 241 | jp 115 / jnp 41 (+`jne`/`je`) | **jp = above-or-unordered** |
+| `0x01` | C0 | 9 | je / jne | C0 alone (below-or-unordered) |
+
+*C1 is AH bit 1 — no observed mask uses it, so no branch here depends on a sticky exception
+bit.* The bit positions are the standard x87 status-word layout (Vol 1 figure; the local PDF
+copy is Vol 2A only); the mapping is corroborated independently by all three masks acquiring
+coherent meanings at once, and by the two applications below.
+
+Reproduce with:
+
+```python
+md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+md.skipdata = True                       # essential: recovers from the constant pools
+ins = list(md.disasm(text_bytes, 0x10000000))   # .text rva 0x1000 size 0x328000
+for k, i in enumerate(ins):
+    if i.mnemonic == 'fnstsw':
+        for j in (k + 1, k + 2, k + 3):         # test ah, imm8 within the next few insns
+            ...
+```
+
+**Two applications that confirm both the masks and §2:**
+
+- **Degenerate-segment guard**, linear evaluator 0x54572..0x5457E: `fcompp` (the two segment
+  boundary x-values) → `test ah, 0x44` → `jp 0x54581`. Taken iff the values are **≠**; when
+  they are **equal** it falls through to a bare `ret 4`. That is exactly the divide-by-zero
+  guard for the lerp denominator — independent confirmation of both the mask semantics and the
+  curve-evaluator reading in §2.
+- **Smooth-curve branch**, 0x547E5 (and 0x546F0's twin at 0x5473F): `fcom dword [0x10329A08]`
+  → `test ah, 5` → `jp 0x5480F`, taken iff **u ≥ 0.5** (unordered included).
+
+## 8b. A real angle site — the phantom "double-fpatan controller" is dead (J11)
+
+The RVAs previously flagged as a *double-fpatan look-at controller with no callers* are not
+decoded instructions at all; both hold `33 C0`:
+
+| RVA | bytes | decode |
+|-----|-------|--------|
+| 0x5EA03 | `33 C0 53 57 8D 4C 24 30` | `xor eax, eax` (else-arm of an `if (x) eax = x; else eax = 0` idiom) |
+| 0x5EF03 | `33 C0 8B 4C 24 50 8D 54 …` | `xor eax, eax` |
+
+The genuine `fpatan` in that neighbourhood is at **0x5EA8B**, reached by an in-order stream.
+Bytes `DE C1 D9 FA D9 44 24 28 D9 44 24 20 D9 F3 D8 AE 94 00 00 00`:
+
+```
+0x5EA7F  faddp st(1)                     ; part of a squared-magnitude sum …
+0x5EA81  fsqrt                           ; … hypot-style normalisation
+0x5EA83  fld  dword ptr [esp + 0x28]     ; → ST(1)
+0x5EA87  fld  dword ptr [esp + 0x20]     ; → ST(0)
+0x5EA8B  fpatan                          ; atan(ST(1)/ST(0)) — i.e. atan2(vertical, horizontal)
+0x5EA8D  fsubr dword ptr [esi + 0x94]    ; = [esi+0x94] − atan(…)   (fsubR, not fsub)
+0x5EA93  fst  dword ptr [esp + 0x14]
+```
+
+So the object carries an angle at `+0x94` and this site computes *its difference* from an
+atan2 of two locals — **this** is the look-at/aim candidate to chase, not 0x5EA03/0x5EF03.
+Whether it belongs to skeleton, camera or actor code is still open (no direct E8 caller
+traced; component attribution **[I]**).
+
 ## 9. Relevance to kuluu + open items
 
 The kuluu constants (`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`,
@@ -253,11 +358,18 @@ the user. Citation form for those edits: `FFXiMain.dll retail-2026-09 RVA 0x...`
   where the `{index, scale}` entries are authored; the head's `scale` is the prime
   tug/limit factor. Not yet located.
 - **A separate look-at/aim controller** (distinct from the animation integrator) is not
-  ruled out. The double-fpatan skeleton sites 0x5EA03 and 0x5EF03 have **no direct E8
-  callers** (vtable-dispatched or dead) — worth a vtable-slot trace.
+  ruled out, but the old lead for it is gone: 0x5EA03 / 0x5EF03 are `xor eax, eax` sweep
+  artifacts (§8b). The site to chase instead is **0x5EA7F..0x5EA93** (atan2 minus a stored
+  angle at `[obj+0x94]`).
 - **0x3138BA helper's exact transform** (J3).
-- **Smooth-curve basis + branch selection** (J1 caveat) — depends on the `test ah,5`
-  x87 idiom (sticky Inexact bit).
+- **Smooth-curve polynomial basis** (§2) — the *branch selection* is settled (§8a: `jp` ⇒
+  u ≥ 0.5); what is not yet pinned down is the exact quadratic basis of each branch.
 - **The per-entity update (0x8F000..0x93500)** was only scanned for FPU const compares
   (none found); a full decode of its target-direction handling is not done.
 - **Instance identity** of the 0x69F90 clock writer and the 0x47BFA8 global (J5 note).
+- **Which vtable slot `0x5E9C0` occupies.** Unresolved. A scan for aligned runs of code
+  pointers finds a pointer to it inside one *contiguous* run beginning at `.rdata 0x32B890`
+  (≥ 505 consecutive entries), at offset +0x134 in that run — which means slot numbering is
+  meaningless there until real vtable boundaries are established (adjacent tables merge into
+  one apparent "run"). Any specific slot index quoted before that boundary work is done
+  should be treated as unverified.

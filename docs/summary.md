@@ -66,6 +66,15 @@ not just a number.
   0x330F40) → sub→fourcc table (0x35AF60) → routine resolver (0xCE490, model DAT) →
   scheduler nodes (actor +0x68) → stage stream (0x05 skeleton anim, 0x07 lock, 0x02 VFX,
   0x0A sound, …). The complete mob-animation mechanism.
+- **J pass — the x87 flag-test idioms, decoded [V] (J10).** Every `fnstsw ax` →
+  `test ah, imm8` pair in `.text` uses one of four masks: `0x05` = ≥ / < , `0x44` = ≠ / = ,
+  `0x41` = above-or-unordered, `0x01` = C0 alone (per SDM Vol 2A Table 3-21). This unlocks
+  FPU branch structure generally — it closed the curve evaluators' u-vs-0.5 selection and
+  exposed their divide-by-zero guard, and it shows **no** dependence on sticky exception bits.
+  Details + reproduction recipe: [joint.md](joint.md) §8a.
+- **J pass — a real atan2 site at 0x5EA7F..0x5EA93 [V] (J11).** `faddp`/`fsqrt` then
+  `fpatan` and `fsubr dword [esi+0x94]`: an object angle minus the atan2 of two locals, i.e.
+  a plausible look-at/aim computation. The current lead for §9.
 - **Key globals [V]:** entity table (0x480AF0 @ 0x6A995428 / 0x480B30 @ 0x6A7297F5,
   stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
   clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
@@ -89,6 +98,20 @@ not just a number.
 - **Per-entity update (0x8F000..0x93500) as the head-limit home — no [V] (J8).** Zero FPU
   compares against `.rdata` constants in that region; the limit is not a dot-vs-const
   clamp there.
+- **"Corrupted capstone x87 table" — wrong [V] (J10).** Capstone 5.0.7 decodes every
+  disputed D8–DB cell correctly; `DB F8..FF` is *genuinely invalid* (`<undecoded>` is right)
+  and **FCOMIP = `DF F0+i`**, not a `DB` encoding. The real failure mode is **linear-sweep
+  alignment** — decoding that starts mid-instruction drifts into interleaved float constant
+  pools; capstone's `skipdata=True` recovers on its own. Patching decode tables would inject
+  wrong instructions, so no tool change was made. M17/M20/J1–J9 are unaffected (they use
+  memory-operand forms that always decoded correctly).
+- **"Double-fpatan look-at controller at 0x5EA03 / 0x5EF03" — wrong [V] (J11).** Both RVAs
+  hold `33 C0` = `xor eax, eax`: sweep artifacts, not instructions. Chase 0x5EA7F..0x5EA93
+  instead.
+- **A specific vtable slot index for 0x5E9C0 — unverifiable today [V].** A code-pointer-run
+  scan puts the pointer to it at `+0x134` inside one contiguous run starting `.rdata 0x32B890`
+  (≥ 505 entries). Adjacent tables merge into a single apparent run, so slot numbers there are
+  meaningless until real vtable boundaries are established.
 - **XIClient source as ground truth — unreliable [O/I].** Used only as a navigation map for
   *where to look*; its layout (e.g. the view matrix) conflicts with the retail C2 layout.
   Every finding is verified in the DLL, not taken from XIClient.
@@ -167,7 +190,9 @@ Two layers: the **driver** (F pass) picks *which routine/clip* to play; the **sk
   wrapped to (−π, π] (loop back-edge `jmp 0x4B87E`). Three sibling slots: `+0xE0`, `+0xE4`,
   `+0xE8`; an "updated" flag at `+0x187`.
 - `curve` = a per-class keyframe evaluator over (x,y) points at table+0x30/+0x38/…:
-  0x54500 (linear lerp) or 0x547A0/0x546F0 (quadratic "smooth", branch at u=0.5).
+  0x54500 (linear lerp) or 0x547A0/0x546F0 (quadratic "smooth", branch taken iff u ≥ 0.5 —
+  resolved via the flag idioms, J10; includes a divide-by-zero guard when two segment
+  boundaries compare equal).
 - Driven by the **animation clock 0x65CB14** and the **frame dt** (0x47BFA8 `+0xEB0` =
   0x14CF0). Per-joint param struct: `{word (6-bit index at bits 13–18), scale@+4,
   scale2@+8}`.
@@ -257,9 +282,11 @@ scale** (the prime tug factor). To extract them we need:
    velocity); and
 2. the **per-joint param struct** `{index, scale@+4, scale2@+8}` (the head's `scale`).
 
-A **separate look-at/aim controller** is not ruled out: the double-fpatan skeleton sites
-**0x5EA03 / 0x5EF03** have **no direct E8 callers** (vtable-dispatched or dead) — worth a
-vtable-slot trace.
+A **separate look-at/aim controller** is not ruled out, but its old lead was bogus: the
+"double-fpatan sites" **0x5EA03 / 0x5EF03** are `xor eax, eax` linear-sweep artifacts (J11).
+The site worth tracing now is **0x5EA7F..0x5EA93** — `fpatan` of two locals subtracted from an
+angle stored at `[obj+0x94]`. Tooling note: always sweep with `skipdata=True`; see §8a of
+[joint.md](joint.md) for the x87 ground truth (capstone was never broken).
 
 **The steering question (user, decides the dig):** from retail observation, does the head's
 target-tracking look like it is **part of the animation** (the head joint's own curve
