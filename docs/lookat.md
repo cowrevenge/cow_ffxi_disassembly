@@ -1,4 +1,4 @@
-# FFXI retail client: look-at — **two separate systems** (W + W2 passes)
+# FFXI retail client: look-at — **two separate systems** (W + W2 + W3 passes)
 
 Cut against TDS **0x6A995428** (`client=retail-2026-09`), conventions in [../README.md](../README.md).
 Split out of `summary.md` §10 as planned, because the two systems were being conflated and one number was
@@ -12,7 +12,13 @@ observation. `[V(me)]` = re-verified by me in this session against `FFXiMain.unp
 > default `pi/6` = 30°, plus 65° presets) is used only by the **menu / preview display model** (singleton
 > `[0x10669158]`). The in-world walker never calls it. Any kuluu code that pins a head clamp to 0.5236 rad
 > "because the DLL said so" is built on a wrong citation — my own earlier §10/W4 wrote exactly that, and I
-> re-verified the pi/6 sites only against the *menu* path. **The walker's angular clamp is still unlocated.**
+> re-verified the pi/6 sites only against the *menu* path.
+>
+> **Update (W3): the walker's clamp has since been found, and it is not an angle** — it is a per-model authored
+> **ellipse** {xlim, ylim} applied by `0x2B140` through the bend at `0x2AC60`, loaded from the skeleton chunk
+> (kind `0x29`): head `(0.24, 0.16)` + neck/shoulder `(0.16, 0.06)` for the standard humanoids, with per-model
+> variants and zeros meaning "that bone does not bend". See **§E**. The correction above stands: nothing in the
+> walker path uses `pi/6`.
 
 ---
 
@@ -92,11 +98,9 @@ the behavioural counterpart of the DAT records counted in [drivetask.md](driveta
 `0x89` records, duration-only operands ⇒ actions/emotes freeze the head for N ticks or until you step, then it
 resumes.
 
-### Still open — the "bend" **[I]**
-The consumer that reads `model+0xB0..B8` + weight and applies the actual **angular clamp** (plus any shoulder
-share) has not been located: it is a method of the class reached through the `actor+0x674` list — accessor call
-at **0xD5B1E → 0x2B5A0** **[V(me)]**, and the struct pointer itself hasn't been caught yet. Until then kuluu must
-**not** invent a clamp angle for the walker.
+**The "bend" is found (W3).** The consumer of `model+0xB0..B8` + weight, the ellipse clamp it applies, the shoulder
+share and the authored limits that feed both are now byte-verified in **§E below**; the earlier "angular clamp
+unlocated" framing in this section and in §C/§D is superseded by §E.
 
 ---
 
@@ -134,5 +138,130 @@ for a in range(0xcc880,0xcca60):                                   # the real ca
   the ±0.04/frame weight ramp (~25 frames @60 fps) with reset to straight-ahead at weight 0 · LockLookAt-stage
   suppression for N ticks-or-1-unit-moved.
 * **Do not port**: 30° (or any angle) as the walker's head limit — that number belongs to the menu/preview model.
-* **Open knob**: keep the clamp and the shoulder share parameterized until the bend consumer is found; if you must
-  ship today, run unclamped with a generous debug-menu-only guard rather than inventing an angle **[I]**.
+* **Now portable (was "open")**: the angular clamp is *not* one angle but a per-model **ellipse** {xlim, ylim, scale}
+  read from the skeleton chunk, head + neck/shoulder as two records — §E. Port the ellipse and load the authored
+  record; do not pin an angle in code.
+* **Data caveat**: only ~26% of shipped skeletons author a non-zero limit at all (many mobs/props author zeros,
+  which means *that bone does not bend*). kuluu must read the record per model rather than assume humanoid values
+  apply everywhere (§E.3).
+
+---
+
+## E. The bend and the ellipse clamp — `0x2AC60` / `0x2B140`, and where the numbers live **[V(me)]**
+
+This is §B's missing consumer, found by reading the code rather than hunting angle constants.
+Everything in E.1/E.2/E.4 was read from bytes this session (`FFXiMain.unpacked.dll`, offset == RVA);
+the *semantics* I could not fully trace are marked **[I]**.
+
+### E.1 The bend — `0x2AC60`, exactly one caller at `0x2A32E` **[V(me)]**
+
+```
+0x2ACD9  lea  ebx, [edi+0xb0]      ; the model's own look point (the §B target point) -> operand
+0x2ADE3  mov  edx, [edi+0xbc]      ; *** the ±0.04/frame blend weight from §B, consumed here ***
+0x2AD55  call 0x14cf0              ; frame tick (the same clock as the walker)
+0x2AD71  push 0x3d000000           ; *** f32 1/32 -> helper 0x276A0 : chase 1/32 of the remaining
+                                    ;     distance per tick (~0.5 s time constant) ***
+```
+
+So `model+0xB0..B8` (look point) and `model+0xBC` (weight) are both read here — that closes §B's open question.
+The **slew** is 1/32 of the remaining distance per tick **[V(me)]**, which sits *underneath* the ±0.04 weight ramp:
+the weight opens the gate, the 1/32 chase moves the point.
+
+How many bones bend (the "mode"), at `0x2AE0D..0x2AEBB` **[V(me)]**:
+
+```
+; the caller pushes the result of predicate 0x84390 — the SAME own-status predicate that gates §B's look-at:
+0x2A319  lea ecx, [ebx+0x30]; mov ecx, esi; call 0x84390 ; push eax
+0x2A32E  call 0x2ac60
+; inside: value in {0x30} ∪ {0x3F..0x53}  -> bend ONE record
+;         anything else                   -> bend TWO records
+0x2AEB5  mov ebx, 2                       ; loop count for the per-record pass (a second pass at 0x2AF1B)
+```
+
+One record ⇒ head only (the §E.2 record index 0); two ⇒ **head + neck/shoulder**. The status set that reduces it
+to one is authored as "sitting / resting / event-ish" **[I]** — same predicate family as the look-at gates, so
+retail ties the shoulder share to actor state without any separate switch.
+
+Per record, before use: `call 0x35270(index)` (`0x2AEDC`) and if the record's first two floats are ≤ 0-ish it is
+skipped (`fld [ecx]; fcomp 0` / `fld [ecx+4]; fcomp 0` at `0x2AEE3..0x2AF00`) **[V(me)]** — i.e. *a zero limit record
+means that bone does not bend*. Then the clamp runs: `push ecx` (the record) … `call 0x2b140` (`0x2AF06..0x2AF1B`)
+**[V(me)]**.
+
+### E.2 The ellipse clamp — `0x2B140`, exactly one call site (`0x2AF1B`, inside the bend) **[V(me)]**
+
+Record layout is `{xlim f32 @+0, ylim f32 @+4, scale f32 @+8}` (fields read at `0x2B1DB` / `0x2B1E3` / `0x2B268`)
+**[V(me)]**. Behaviour:
+
+* authored values ≤ 0 fall back to **0.001f** (`.rdata` VA `0x1032A22C`) for either axis — a guard against a
+  divide-by-zero on unauthored bones, *not* a default limit **[V(me)]**.
+* the direction is aspect-normalised by the two axes (`0x2B21F..0x2B24F`: `fdiv`/`fmul` pairs) — so the limit is
+  genuinely elliptical, not a cone **[V(me)]**;
+* then scaled: one branch multiplies by `scale × 100.0f` (`.rdata` VA `0x1032A3C8` = 100), the other by
+  `scale / x` — the caller selects which via a parameter **[V(me)]** for the arithmetic, **[I]** for its meaning;
+* radius `R = sqrt(X²+Y²)` (`0x2B2A0..0x2B2AA`), compared to a limit; on the normal path **`fpatan` at
+  `0x2B2BD`** then `fcos`/`fsin` × R write the boundary point `[esi]`, `[esi+4]`, with `w = 1.0`
+  (`0x2B2C6..0x2B2E0`) **[V(me)]**. Over the limit / degenerate ⇒ branch at `0x2B33F` (re-normalise, force
+  `[esi+0xC] = 1.0`, return 0) **[V(me)]**, semantics **[I]**.
+
+So: **the head's angular limit is an ellipse in the bone's own tangent plane, with a vertical semi-axis** — this
+corrects my earlier "no up/down head motion" line, which was true only of the menu-model path (one `fpatan`, one
+axis, §A) **[V(me)]**.
+
+### E.3 Where the authored numbers live — skeleton chunk kind **`0x29`**, not `0x20`
+
+The record array is reached by accessor `0x35270(index)` (callers `0x2AEDC`, `0x2AFC3`, `0x34CBD`, `0x34DB4`)
+**[V(me)]**, whose arithmetic fixes the layout exactly:
+
+```
+0x35210/0x3522A   resource lookup on [model+0xC] -> block; bone count u16 @block+0x32;
+                  bones = block + 0x34, stride 30                      (lea ecx,[ecx+ecx*2]; *9; eax+ecx*2+0x34)
+0x35250           refs table: count u16 at bones_end; entries = 4 + n*26  (lea ecx,[ecx+edx*4] -> 13n, *2 = 26)
+0x35270           look-at record array: refs_end + 0x48 + 12*index     (lea ecx,[ecx+ecx*2+0x12]; eax+ecx*4)
+```
+
+**Replication note, and my earlier failure explained.** The resource-manager block carries a **0x30-byte prefix**
+over the on-disk chunk body: relative to kuluu's parsed slice (chunk body after the 16-byte header) the same
+fields are bone count u16 `+0x02` and bones from `+0x04`, which is exactly what `ffxi-dat/src/skel.rs` already
+uses **[V(me)]**. So for kuluu the anchors are: **records at `refs_end + 0x48`, stride 12**, where
+`refs_end = 0x04 + n·30 + 4 + m·26`. My previous attempt to replicate this read *chunk type* `0x20` — but
+`0x20` is kuluu's own `ChunkKind::Img` (textures: the bodies literally carry `TXD`). The skeleton kind is **`0x29`
+(`ChunkKind::Bone`)**; that mismatch, not a wrong layout, is why it "gave no plausible pair" **[V(me)]**.
+
+Census over this install (`C:\PhoenixXI\SquareEnix\FINAL FANTASY XI`, all `.DAT`, chunks walked with kuluu's own
+header decode: kind = `h & 0x7F`, len = `((h >> 7) & 0x7FFFF) * 16`) **[V(me)]**: **3,365** skeleton chunks parsed
+(2 short / 1 joint-check reject), and the `{xlim, ylim}` pairs are authored per model:
+
+| records {head}, {neck/shoulder} | skeleton chunks | who |
+|---|---|---|
+| `(0.24, 0.16)` + `(0.16, 0.06)`, scale `0.5` | **539** | the standard humanoids: `hum_` (70), `tar` (68), `mit` (59), `elv_` (113), `huf_` (35), `kids` (42), `eve`, and named NPCs (`aldo`, `corn`, `cum`…) |
+| `(0.1, 0.1)` + `(0.1, 0.1)`, scale `0.5` | **310** | `ork ` (96), `corp`, and part of `yagu` (18/79) and `kame` (15/79) |
+| `(0.15, 0.15)` + `(0.15, 0.15)`, scale `0.5` | **22** | assorted |
+| `(0, 0)` ⇒ that bone does not bend, scale `0.5` | **2,488** | most mobs/props — and **all** `gob_` (106/106) and `sao ` (106/106) |
+
+Two things this settles and one it opens:
+* the numbers are **authored per-model data**, not a `.rdata` constant **[V(me)]** — so kuluu loads them from the
+  skeleton chunk (the B-style data-driven path) rather than pinning a limit;
+* shoulder ellipse is smaller than head's, always with `scale = 0.5`, in every shipped record pair **[V(me)]**;
+* **open observation [O?]**: this install authors *zero* limits for the `gob_` and `sao ` (Goblin / Tarutaru)
+  skeletons and only a minority of `yagu`/`kame`. That predicts those races' models never bend a head toward the
+  target in retail. Worth one glance in-game before kuluu ships per-race behaviour that assumes otherwise.
+
+### E.4 Reproduce (host python, capstone 5.0.7)
+
+```python
+d=open('C:/tmp/ffximain_work/FFXiMain.unpacked.dll','rb').read()      # offset == RVA
+import struct, re
+struct.unpack_from('<f',d,0x2ad71-3)                                   # 0x3D000000 = 1/32 pushed at 0x2AD71
+def callsites(t):
+    return [a for m in re.finditer(b'\xe8', d) if (a:=m.start())+5<len(d)
+            and a+5+struct.unpack_from('<i',d,a+1)[0]==t]
+callsites(0x2ac60), callsites(0x2b140)                                # -> [0x2a32e], [0x2af1b]
+# on-disk records (kuluu anchor):
+n=u8(chunk_body,2); bones=cb+4; m=u16(bones+n*30); refs_end=bones+n*30+4+m*26
+rec=[struct.unpack_from('<3f', chunk_body, refs_end+0x48+12*i) for i in range(3)]
+# hum_ (ROM\125\74.DAT) -> [(0.24,0.16,0.5), (0.16,0.06,0.5), (0,0,0.5)]
+```
+
+Scratch tools for this pass: `w1_accessor.py`, `w5_bend.py`..`w8_clamp2.py`, `w9_limits_scan.py`,
+`w10_race.py`/`w12_racevar.py`, `w13_callsites.py`, `w14_bendcaller.py` (session scratchpad; the reusable
+chunk-walk + record read belongs in `tools/dat_stage_scan.py` next time someone touches this).
