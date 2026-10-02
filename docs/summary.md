@@ -7,8 +7,8 @@ parity ("retail is king, dll is king"). Each section cites the pass that verifie
 Passes: **M** = [docs/movement.md](movement.md) (walker), **C** = [docs/camera.md](camera.md)
 (event camera), **F** = [docs/mob_animation.md](mob_animation.md) (animation driver), **T** =
 [docs/target_track.md](target_track.md) (target-track), **J** = [docs/joint.md](joint.md) (skeleton
-joint layer), **D** = [docs/drivetask.md](drivetask.md) (scheduler drive tasks), **W** = walker look-at
-(this file, section 10; to be split into docs/lookat.md). Conventions (RVA base 0x10000000, POL1-packed
+joint layer), **D** = [docs/drivetask.md](drivetask.md) (scheduler drive tasks), **W/W2** = look-at ([lookat.md](lookat.md))
+— **two separate systems**, menu model vs in-world actor. Conventions (RVA base 0x10000000, POL1-packed
 `.text`, evidence tiers) in [../README.md](../README.md).
 
 **Builds.** M/T/J/D/W were cut against TDS **0x6A995428** (retail-2026-09, the current
@@ -37,7 +37,7 @@ for itself in a symptom the user can see in-game:
 |---|----------------------------------------|-------------------------------|
 | **S1** | While strafing a locked target, upper body/legs turn the wrong way; weapon vanishes with certain DAT choices | Open. Needs the retail Head/Body/Legs/Weapon heading rule per state (no-target / target / locked), incl. "force toward target" rather than shortest-arc (§4, §8) |
 | **S2** | Idle↔walk shows a seam — same clip "restarting" instead of continuing from shared key points | Open. Needs how retail stores/blends keyframes (`sqmoKeyChannel`/`sqmoMixerMotion`) rather than restarting clips (§6) |
-| **S3** | Head looks at the target to a limit then snaps back straight; body tugs slightly L/R | **Half resolved.** Limit/mechanism verified: yaw-only ±30° clamp on one dancer model slot per frame (W4/W5, §10). Still open: the release/snap-back angle, which bones/models are registered (the shoulder tug), and any slew easing (§9 items 1–2) |
+| **S3** | Head looks at the target to a limit then snaps back straight; body tugs slightly L/R | **Rule resolved, angle still open [V] (W/W2).** Looking away is *not* angular: release fires at horiz ≤ 0.3 units or forward component ≤ −0.5 (half a unit behind the shoulder line), and the "snap" is a ±0.04/frame blend weight (~25 frames at 60 fps). Unlocated: the walker's angular clamp + shoulder share (the "bend"). **The ±30° we published earlier belongs to the menu/preview model, not the walker** — do not port it ([lookat.md](lookat.md)) |
 | **S4** | Camera spring/leash feel; locked-camera catch-up in ≲1 s without swinging past the player | Mostly verified as zoom/focal + re-anchor + spring-back (M17 corrected/M18, §5); the leash distance itself is still user-set, not dll-derived |
 
 **Acceptance test for any of these:** a kuluu build the user can drive — press keys, watch the
@@ -68,12 +68,17 @@ hardcoded model (`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`, `HEAD_SLEW_TAU_FRAME
 `kuluu-render/src/ffxi_actor_render.rs` ~3241, plus the state-2 body behavior in
 `kuluu/src/view_native/input.rs`):
 
-- **Head-look limit**: **RESOLVED [V] (W4): 30.0 degrees, yaw only, hard default.** See section 10.
-- **Up/down**: **RESOLVED [V] (W5): none.** The walker look-at is horizontal only.
-- **Head slew rate**: open. The clamp is instantaneous in sqmdModelLookAt; any easing is upstream
-  in how the target position is fed per frame, or downstream in the joint integrator (J).
-- **Reset-to-straight (snap back)**: open (W open item 1).
-- **Body-tug (shoulder)**: mechanism located, numbers open (W open item 2).
+- **Head-look limit (walker)**: **NOT FOUND — and the earlier answer was wrong [V] (W/W2).** The ±30°
+  (`pi/6`, with 65° presets) belongs to dancer's model-slot look-at, used only by the **menu/preview display
+  model** (singleton `[0x10669158]`). The in-world walker never calls `sqmdModelLookAt`; its clamp lives
+  downstream of `model+0xB0..B8` + weight and remains unlocated ([lookat.md](lookat.md) §B).
+- **When it looks away**: **RESOLVED [V] (W2)** — positional, not angular: release at horizontal distance
+  ≤ **0.3**, or forward component ≤ **−0.5** in actor-local space (forward = +X).
+- **Up/down**: none in the menu path (one fpatan, one axis [V]); unknown for the walker until the bend is found.
+- **Head slew**: **RESOLVED [V] (W2)** — blend weight `model+0xBC`, ±**0.04/frame** (`0.04f` @ `.rdata 0x32A85C`)
+  to 1.0 while aiming and back to 0 on release, then the look point resets straight-ahead: ~25 frames each way,
+  which is why retail reads as a snap. Frame-scaled variant `vt[0x144]() × 0.01 × 0.04` when `0x87060()`.
+- **Body-tug (shoulder)**: open — same missing consumer as the clamp.
 
 More broadly: a correct model of retail walker, camera, and animation/skeleton behavior so kuluu
 matches the model, not just a number. End state chosen by the user: **data-driven (B)**, kuluu
@@ -83,10 +88,17 @@ implements the same consumers retail does and the authored data flows through.
 
 ## 2. Good leads found
 
-- **W pass, the walker head-look is a dancer per-model look-at [V].** Every registered model has
-  a slot in dancer's model array; the slot carries bone index, limit, target position and an
-  enable flag; dancer's per-frame update calls `sqmdModelLookAt` which computes yaw = atan2 to the
-  target and clamps it to +-limit. Default limit = pi/6. Section 10.
+- **W pass (relabelled): the model-slot look-at is the MENU system [V].** Dancer's model array
+  (`[0x1099AED0]`, stride `0xAC`) holds bone index / limit / target / enable-bit slots, and its per-frame update
+  calls `sqmdModelLookAt` — yaw = one atan2, clamped to ±limit (`pi/6` default), applied to exactly one bone.
+  Correct for the menu/preview model `[0x10669158]`; **not** what in-world actors do ([lookat.md](lookat.md) §A).
+- **W2 pass: the real actor look-at is method 0xD5B10 (`E8` call site at 0xCCA03) [V].** Target =
+  `GetLockedTarget(g_pInputMng)` for the local player, own target (0x845E0) for NPCs/mobs; status gates
+  {0,1,2,6,7,8} / {0,0x2F,0x30} or mount predicates 0x84330/0x84350/0x84370; look point = target's
+  **attach point 3** with `Y −= 1.2` when `target+0xB2`, stored at `actor+0x848..0x850`; mode float
+  `actor+0x854` ∈ {0 aim, +1 hold (bit 0 of actor+0x840), −1 release}; release on no-target / LockLookAt bit /
+  gate fail / horiz ≤ **0.3** / forward ≤ **−0.5**; blend weight `model+0xBC` at ±**0.04/frame**. Every constant
+  and call site re-verified byte-for-byte in [lookat.md](lookat.md) §C.
 - **D pass, the scheduler task contract [V].** `CMoSchedularTask_Interpret` (0x57FB0) walks the
   DAT 0x07 routine stage stream; `case = type_byte - 2` (194 cases, table 0x5DC1C). Stage 0x89 =
   LockLookAt (alloc 0x80), 0xA9/0xAA = ActorRotation (alloc 0xA0, two variants). Record layout
@@ -149,6 +161,17 @@ implements the same consumers retail does and the authored data flows through.
 - **16-step compass (0xA7851), dead [V]. 0x487F98, read-only zero [V]. L/R arrow yaw, dead [V]
   (M19). `[obj+0xE0]` as a unique joint slot, no [V] (J9). 0x3138BA as fmod, no [V] (J3).**
 - **XIClient source as ground truth, unreliable [O/I].** Navigation only.
+
+- **"The ±30° / pi-6 clamp is the walker's head limit", no [V] (W2).** That slot system serves the menu/preview
+  model singleton `[0x10669158]`; in-world actors never call `sqmdModelLookAt`. I published that number as the
+  walker's and it got cited into kuluu — do **not** port `HEAD_MAX_TURN_RAD = 0.5236` on that authority.
+- **"The head leaves you because of an angle limit", no [V] (W2).** Release is positional: horiz ≤ 0.3 or
+  forward component ≤ −0.5 in actor-local space (forward = +X). There is no release angle to go find.
+- **`0x27C2CC` as a look-at consumer, no [V].** A dancer debug dump (double→float conversions feeding printf).
+- **"Interpreter case index = scheduler stage type byte" (`0x87` = LockLookAt, `0xA8` = ActorRotation) — falsified
+  against data [V] (DAT pass).** The rule is `case = type − 2`: across chunk-`0x07` streams `0x87` never occurs and
+  the ten `0xA8` records are two-int records too short for ActorRotation; LockLookAt is stage `0x89`, ActorRotation
+  is `0xA9/0xAA`. Re-verified from the dispatch bytes in [drivetask.md](drivetask.md) §10.
 
 ## 4. How we think the ffxi walker works (M pass)
 
@@ -238,8 +261,18 @@ Control Function 0xA65CB (local-player tick)
    |- dir x= dt (0x14CF0) -> contact gate (0xA8770)
    |- *pos += dir; facing = direction of travel (M10)
    |
-   |  [game side] registers look-at on the actor's model(s):
-   |     slot.bone = <bone idx>, slot.target = target pos (per frame), slot.flags |= 0x200
+   |
+   |  MENU / PREVIEW MODEL ONLY ([0x10669158]):
+   |     dancer model array [0x1099AED0] stride 0xAC, flag bit 0x200
+   |     -> sqmdModelLookAt (0x278E90): one atan2, clamp +-limit (pi/6 default), exactly one bone
+   |
+   |  IN-WORLD ACTOR LOOK-AT (all actors, per update; E8 call at 0xCCA03):
+   |     method 0xD5B10: target (GetLockedTarget / own) -> status gates -> attach point 3 (Y -= 1.2 if +0xB2)
+   |     -> actor+0x848..0x850 look point; actor+0x854 mode {0 aim, +1 hold, -1 release}
+   |     -> release: horiz <= 0.3 OR forward <= -0.5 (actor-local +X) OR LockLookAt(stage 0x89) bit
+   |     -> model+0xBC weight ramps +-0.04/frame (~25 f @60fps); at weight 0 the look point resets straight-ahead
+   |     -> ??? "the bend": consumer of model+0xB0..B8 + weight that applies the angular clamp - NOT FOUND;
+   |        class reached via actor+0x674 list (accessor call 0xD5B1E -> 0x2B5A0)
    v
 dancer model array [0x1099AED0] (stride 0xAC per registered model)
    |  per-frame update 0x26E4C2 -> for each model with flag 0x200:
@@ -264,19 +297,12 @@ bone matrices -> render
 
 ## 9. Where we are looking next
 
-**Walker look-at (W), two open reads:**
-1. **Release / snap-back [O].** The verified path is a clamp, which pins the head at 30 deg; the
-   user observes a release past the limit. Either sqmdModelLookAt's caller zeroes the look-at when
-   the raw yaw exceeds the limit (check the caller at 0x26E6C4..0x26E6E9 and the result globals
-   0x1099AF48..AF54), or the game side disables it (0x27021C sets bone = -1) past a cone. One of
-   those holds the release angle.
-2. **Shoulder [O].** sqmdModelLookAt rotates exactly one bone; no chain distribution. The small
-   shoulder turn is therefore a second registration (FFXI characters are multi-model; the body
-   model has its own slot and could register a spine bone) or hierarchy inheritance. The game-side
-   bone setters (0x2701EA, 0x26FA59, and 0x27021C disable) have no direct E8 callers, so they are
-   vtable-dispatched: resolve via tables_vtables.csv / angr callgraph, read the callers, and that
-   gives exactly which models and bones the walker registers, and whether the body slot's limit
-   or +0x84 weight differs from the head's.
+**Walker look-at (W2) — one consumer missing: "the bend".** The rule set is verified
+([lookat.md](lookat.md) §B): target selection, gates, attach-point-3 look point, mode float, positional release,
+±0.04/frame weight. What is not located is whatever reads `model+0xB0..B8` + `model+0xBC` and applies the actual
+**angular clamp** (and with it any shoulder share) — a method of the class reached through the `actor+0x674` list,
+accessor at 0xD5B1E → 0x2B5A0. Approaches already burned: hunting angle constants around the walker (release is
+positional), and reading `sqmdModelLookAt`/its pi-6 limit as the consumer (menu model only); `0x27C2CC` is a debug dump.
 
 **Data-side leftovers** ([drivetask.md](drivetask.md) §10): the dispatch rule is now byte-confirmed
 (`case = type − 2`, bound `cmp edx,0xC1` ⇒ **194** jump-table entries; our earlier "196" was a scan that
@@ -295,70 +321,24 @@ chunk type**. Read handlers consumer-side; do not infer meaning from a census ag
 - S1 strafe/legs facing (parked force-toward-target fix) and S2 idle<->walk pop (clip continues
   from shared keyframes) are kuluu's own heading/clip-restart logic and do not wait on any of the
   above.
-- Head look-at port: yaw only, clamp +-30 deg, one bone, target fed per frame. Replace the
-  cone/slew constant model with this; slew, if any, is upstream.
+- Head look-at port ([lookat.md](lookat.md) §D): implement what is verified — target + gates + attach-point-3
+  look point (Y−=1.2 when `target+0xB2`) + aim/hold/release mode float + **positional** release (horiz ≤ 0.3 or
+  forward ≤ −0.5) + weight ramp ±0.04/frame with reset-to-straight at weight 0; delete the cone/slew constants.
+  Keep any angular clamp as a parameter **with no DLL-backed default**: the walker's clamp is unlocated, and the
+  30° figure must not be ported (menu model only).
 - Camera: replace the "pitch" port with the zoom model (242..900, ease 350); halve the Q/E rate.
 
 No kuluu code has been changed (research-only rule). Citation form for kuluu edits:
 `FFXiMain.dll retail-2026-09 RVA 0x...`.
 
-## 10. W pass: the walker head look-at (TDS 0x6A995428)
+## 10. Look-at — moved to [lookat.md](lookat.md)
 
-Cut to answer: where is the real head-turn limit the user sees in retail and kuluu, and why did
-the DriveTask dig not find it. All [V] unless marked.
+Both look-at systems now live in **[lookat.md](lookat.md)**: §A the dancer model-slot system (menu/preview model
+`[0x10669158]`; one atan2, ±limit with `pi/6` default, one bone), §B the in-world actor method 0xD5B10 (target,
+gates, attach point 3, mode float, positional release, ±0.04 weight ramp), §C my byte re-verification of every
+constant and call site, and §D what kuluu may and may not port yet.
 
-**W1. Not a DriveTask.** `CMoLockLookAtDriveTask` has one spawner: scheduler case 135 (stage
-0x89), handler 0x5B14C -> init 0x5F450. The only other install of its vtable (0x32BA34) is at
-0x5F660, slot 6 of that same vtable, the destructor. Playback only.
-
-**W2. The mechanism is dancer's per-model look-at.** `mdlRegister()` (error string 0x3B19D0)
-places every model in a global array: base `[0x1099AED0]`, count `[0x1099AECC]`, capacity
-`[0x1099AEC8]`, stride 0xAC. Slot layout as initialized by 0x26E530:
-
-| offset | init value | meaning |
-|---|---|---|
-| +0x00 | 1 | flags; bit 0x200 = look-at enabled (tested at 0x26E6BC) |
-| +0x04 | name | model name string (copied at mdlRegister 0x26EBD2) |
-| +0x84 | 1.0f | weight/scale (unread consumer) |
-| +0x88 | -1 | |
-| +0x90 | -1 | look-at bone index (range-checked vs model numBones in LookAt) |
-| +0x94 | **0x3F060A92 = pi/6** | **look-at yaw limit, radians** |
-| +0x98 | vec init (0x274640) | look-at target position (vec3) |
-| +0xA8 | model ptr | set at mdlRegister 0x26EBE2 |
-
-**W3. Apply.** dancer's per-frame update (0x26E4C2, loop body from 0x26E6B1) walks every slot
-with bit 0x200 and calls `sqmdModelLookAt(model=[slot+0xA8], 0, bone=[slot+0x90],
-target=&slot[0x98], limit=[slot+0x94])` at 0x26E6D3 (the function's only caller). sqmdModelLookAt
-is at 0x278E90..0x2790B1 (error string 0x3B3C30 names it); it iterates the model's sub-models
-(`[model+0x44]`) and applies on the one whose index equals arg2.
-
-**W4. The clamp, 0x278FF1..0x279036.**
-```
-fld [esp+0x18]; fld [esp+0x20]; fpatan    ; yaw = atan2(delta)   (delta = target - bone pos, two
-fst  [esp+0x10]                           ;   passes at 0x278F58 and 0x278FB6 via 0x27B080)
-fcomp [esp+0x90]                          ; yaw vs limit (arg5)
-... yaw = +limit if yaw > limit
-fld [esp+0x90]; fchs; fld [esp+0x10]; fcomp st(1)
-... yaw = -limit if yaw < -limit
-```
-`[esp+0x90]` is arg5 = `[slot+0x94]`. **Default pi/6 = 30.0000 deg** (0x3F060A92 is bit-exact
-float32(pi/6)). Every store to `+0x94` in `.text` was enumerated; none targets the model slot
-other than the init. The limit is a hard default.
-
-**W5. Yaw only.** The function contains exactly one `fpatan`. The rotation is built by
-0x27ABA0(&q, yaw): `fld angle; fsin -> q.x; fcos -> q.w`, one angle, one axis. No pitch is
-computed anywhere in this path. Up/down head motion, if the user ever sees it, is not this
-mechanism.
-
-**W6. One bone.** After the clamp: `node = [bone+0x64]`; 0x27ABA0 builds the rotation;
-0x27B170(out, &rot, node+0x68) multiplies it into the bone's node matrix; 0x27A700 writes it
-back. No parent-chain distribution, no weights, inside sqmdModelLookAt.
-
-**Open (section 9):** release/snap-back; which bones/models the game registers (shoulder);
-what consumes `+0x84`; slew (if the target position is eased before being written to +0x98).
-
-**Kuluu-facing conclusion:** the head follows the target in yaw only, clamped to +-30 deg, applied
-to a single bone, with the target refreshed per frame. kuluu's `HEAD_MAX_TURN_RAD` maps to
-0.5236; `HEAD_VIEW_CONE_COS` and `HEAD_SLEW_TAU_FRAMES` have no counterpart in this layer (the
-release and any easing live upstream or in a second registration; see open items). Citation:
-`FFXiMain.dll retail-2026-09 RVA 0x278FF1 (clamp), 0x26E561 (limit)`.
+**The number to un-learn:** ±30° is the *menu* model's limit. The walker's angular clamp is still unlocated, so
+kuluu keeps it parameterized instead of pinning `HEAD_MAX_TURN_RAD = 0.5236`. My earlier §10 claimed otherwise;
+that was my error, corrected here and in [lookat.md](lookat.md). Citations:
+`FFXiMain.dll retail-2026-09 RVA 0xD5B10` (in-world look-at), `0x278E90 / 0x26E530` (menu model).

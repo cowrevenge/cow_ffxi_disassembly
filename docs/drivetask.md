@@ -487,7 +487,7 @@ count from the `cmp` bound (**[V]** — this is a trap worth remembering for any
 
 | record | data found in shipped DATs | matches |
 |---|---|---|
-| **`0x89` LockLookAt** (case 135) | **504 records**, all `len=3`; **every byte after record+0x08 is zero**; the only operand is a signed 16-bit duration at `record+6`, taking just 13 distinct values (192 ×200, 800 ×133, 274 ×56, 84/98/86/178/148 …) | §5b/§8: args are (task, actor resolved from the runtime link slot, duration). **No angle, no limit** — now seen in data, not just inferred from absence |
+| **`0x89` LockLookAt** (case 135) | **504 records**, all `len=3`; **every byte after record+0x08 is zero**; the only operand is a signed 16-bit duration at `record+6`, taking just 13 distinct values (192 ×200, 800 ×133, 274 ×56, 84/98/86/178/148 …) | §5b/§8: args are (task, actor resolved from the runtime link slot, duration). **No angle, no limit** — now seen in data, not just inferred from absence. Its *function* is now known [V(W2)]: while active it makes the actor behave as if it has no look-at target ([lookat.md](lookat.md) §B), and its watchdog ends on ≥1.0 unit moved or duration expiry |
 | **`0xA9` ActorRotation** (case 167) | 5 records (`ROM3\0\43.DAT`) with `pitch=+0.0f`, `yaw ∈ {+90,−90,−135,+45}`, `roll=+0.0f` at `+8/+C/+0x10` | the ctor's three ×π/180 conversions. The **mode byte at `record+0x14`** is the fifth payload dword — past kuluu's four-dword print cap, which is why §9.3 logged it as "unprinted" instead of reading it |
 | **`0xAA` ActorRotation variant** (case 168) | **zero occurrences** in any chunk-`0x07` stream of this install | not a contradiction; unobserved here. Coverage is still limited to chunk `0x07` (§9.4) |
 
@@ -496,6 +496,9 @@ count from the `cmp` bound (**[V]** — this is a trap worth remembering for any
 - Float `pi/6` bits (`3F 0A 06 3F`) appear in `.text` at exactly two sites, `0xD5547` and **`0x26E567`**;
   the latter sits inside W's model-slot init region ⇒ consistent with "one writer for the slot `+0x94`
   yaw limit; default pi/6 is hard-coded".
+  **Scope correction:** those slots belong to dancer's look-at, which only the **menu/preview display model**
+  (`[0x10669158]`) uses. In-world actors use method `0xD5B10` and their angular clamp is *not* pi/6 — see
+  [lookat.md](lookat.md). Nothing in this DriveTask pass bears on the walker's limit either way.
 - In `sqmdModelLookAt` (`0x278E90..0x2790B1`) there is exactly **one** fpatan (`d9 f3`, at **`0x278FF9`**)
   ⇒ consistent with "yaw only, no pitch computed anywhere in this path".
 
