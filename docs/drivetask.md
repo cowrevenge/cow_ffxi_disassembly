@@ -260,3 +260,59 @@ point `open('FFXiMain.unpacked.dll')` at your own working copy, or run from that
   map an RVA to its opcode case index, and dump one handler with floats annotated inline.
 - `fn_locate.py` — resolve the enclosing function of any RVA from `tables_functions.csv`. **Use this
   instead of scanning backwards for `int3` padding**, which mis-detects boundaries.
+
+## 8. Feeder boundary + the op-135 vs op-168 split (verified; closes the "do they both carry degrees?" question)
+
+Byte evidence, TDS 0x6A995428, produced this pass (`tools/` reproduce below).
+
+**They are two different mechanisms.**
+- **op-168 = `CMoActorRotationDriveTask` — authored rotation.** Its ctor (`0x5FA20..0x5FAD9`) performs three
+  conversions `[arg] × π/180`. Those three sites `0x5FA95 / 0x5FABB / 0x5FACB` are the **only** references inside
+  the interpret fn *or either task ctor* to that approximate-π/180 float (`.rdata 0x32A9F4`, value `0.01745278`). **[V]**
+  There is a *second*, different constant — exact π/180 at `.rdata 0x32A840` (`0.0174532…`) — used by other, unrelated
+  code (e.g. `fn 0x38E10`, `0xA6491`, `0x1878B9`). Do **not** assume one global degrees constant. **[V]**
+- **op-135 = `CMoLockLookAtDriveTask` — geometry aim, NOT authored degrees.** Its ctor (`0x5F450..0x5F4E3`) has **zero**
+  references to either π/180 float and no angle operand: it only resolves a target object (via the type-spec predicate
+  `0x1002C8F0` / resolver `0x10062770`) plus one integer through `_ftoll`. So **there is no head-degrees number to extract**, and
+  searching for "the authored LockLookAt angle" is a dead end — the aim comes from geometry (J pass §8b `0x5EA8B` atan2 family),
+  not an authored magnitude. **[V]**
+
+**Where op-168's authored magnitudes live (feeder boundary, one bounded xref).** The interpret entry `0x57FB0` has exactly **four**
+callers: two internal back-edges (`0x5D1D7`, `0x5D8C3`) and **two external feeders** — `fn 0x5E10..0x57FB0` (call at `0x5F2D`)
+and `fn 0x575A0..0x57BE0` (call at `0x69D`). **Both gate through the same routine `0x10057C20` immediately before interpret** — the
+stage-stream record fetch/advance. Feeder A additionally drives scheduler task management (`Scheduler_Kill 0x10056EF0`,
+`0x56B20`, `0x56AC0`) and resolves operands via type-spec against `.rdata 0x32A8CC`. ⇒ the DriveTask operands live in **scheduler
+stage-stream records resolved by *type*, not name**, i.e. DancingMad's model-DAT 0x07 stage streams (candidate source **[I]**).
+
+**Record markers [user-provided, to verify on DAT]:** stage byte `0x87` = op-135 record, `0xA8` = op-168 record; pull ~ten real
+records and the operand layout (duration vs angle vs target) reads by eye.
+
+**STATUS: S3 op-168 operand *extraction* is PARKED — it needs DAT access.** Ask for exactly one thing: **Shane's DAT folder**
+(install ROM dir, or his parked `/tmp` examples). Until that lands there is nothing more to do on the numbers; do not churn.
+
+Reproduce (buffer index == RVA; code refs VA = BASE + rva):
+```python
+# pi/180 census — locate both constants by bits, then abs-ref each; attribute to enclosing fn / opcode case.
+import struct,capstone as cs
+d=open('FFXiMain.unpacked.dll','rb').read(); B=0x10000000   # .text 0x1000..0x328000
+for r in (0x32a840,0x32a9f4): print(hex(r), struct.unpack_from('<f',d,r)[0])
+pa=struct.pack('<I', B+0x32a9f4)          # approximate pi/180 VA bytes
+p=0x1000; sites=[]
+while True:
+    p=d.find(pa,p,0x328000)
+    if p<0: break
+    for st in (p-6,p-5):                  # land on the fmul/fld mem form whose disp is the const
+        try:
+            for i in cs.Cs(cs.CS_ARCH_X86,cs.CS_MODE_32).disasm(d[st:p+4],B+st):
+                if (i.address-B)<=p<(i.address-B)+i.size and i.mnemonic in('fld','fmul'): sites.append(i.address-B)
+        except Exception: pass
+    p+=4
+print([hex(s) for s in sorted(set(sites))])   # -> 3 inside ActorRotation ctor; the rest are unrelated fns; NONE in LockLookAt
+# interpret-entry callers (who feeds stage streams): scan E8 rel32 == target
+tgt=0x57fb0; m=0x1000
+while True:
+    m=d.find(b'\xe8',m,0x328000)
+    if m<0: break
+    if (m+5+struct.unpack_from('<i',d,m+1)[0])==tgt: print('caller RVA 0x%X'%m)
+    m+=1   # -> exactly 4; two external feeders gate through call 0x10057c20
+```

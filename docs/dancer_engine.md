@@ -136,3 +136,8 @@ census in **our** build to say which subsystem they serve.
 - Adopt the Lumina discipline: no name is evidence.
 - Not yet mapped by anyone (their words): sky/sun/moon, water surface, PC shadow rendering,
   in-game settings object; weather selection by weather/time-of-day untraced.
+
+## 5a. Verified in OUR build: LockLookAt ≠ ActorRotation (byte), correcting §3's shared lead [V]
+
+§3 listed `CMoLockLookAtDriveTask` / `CMoActorRotationDriveTask` together as the look-at lead. They are **two different mechanisms**
+in our TDS 0x6A995428 build, so they must be treated separately: ActorRotation converts authored degrees (three pi/180 fmuls in its ctor); LockLookAt does not touch any degrees float and carries no angle operand - it aims a joint at the locked target by geometry. Full evidence + the stage-stream feeder boundary (`interpret` has exactly two external callers, both gating through `0x57C20`) is in [drivetask.md](drivetask.md) §8; joint-look consequence in [joint.md](joint.md) §9a. Neither class's numbers extracted yet - S3 parked pending DAT access.

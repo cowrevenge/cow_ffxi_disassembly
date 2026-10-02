@@ -382,3 +382,18 @@ the user. Citation form for those edits: `FFXiMain.dll retail-2026-09 RVA 0x...`
   meaningless there until real vtable boundaries are established (adjacent tables merge into
   one apparent "run"). Any specific slot index quoted before that boundary work is done
   should be treated as unverified.
+
+## 9a. The op-135 vs op-168 split is verified — this closes a false lead in §9's open items [V]
+
+Reading the two DriveTask ctors side-by-side (D pass, byte-level) settles whether the head limit could be an
+**authored degree magnitude**: it is not.
+
+- **`CMoActorRotationDriveTask` (op-168)** = authored rotation: three `× π/180` conversions in its ctor (`0x5FA95/AB/CB`) are the
+  sole uses of that degrees float inside interpret + either task ctor ([drivetask.md](drivetask.md) §8). Scripted body turns over a duration.
+- **`CMoLockLookAtDriveTask` (op-135)** = geometry aim: its ctor references **no** π/180 constant and carries **no angle operand** —
+  only a target object + an integer count. So the "head follows to a limit" is **not** an authored-degree value on this task, and §9's
+  *primary* lead ("read LockLookAt ctor callers → degree magnitudes") is corrected: for the head-aim task that returns nothing; the aim angle is
+  geometric (§8b `0x5EA8B` atan2 family). **Stop hunting a single authored head-degrees number.** The remaining *limit / slew / tug* numbers stay
+  open in J pass's own curve data / per-joint param scales (the §9 secondary bullet), unchanged.
+
+S3 op-168 operand extraction is PARKED pending DAT access — see [drivetask.md](drivetask.md) §8 status. This document is research-only; no kuluu code touched.
