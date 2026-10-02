@@ -33,10 +33,15 @@ mloc, aloc, dcnt, hwmg, hwpc, hwso, rloc, ldad, show, au??; common effect librar
 (ner?, eis?, st??, hit1-9, sb0?, nerm, stnm, pop1, ...), ROM/90/57.DAT (mdam); dada is defined in 3 files only.
 Names a routine calls need not exist in the same DAT (hwat, aloc,
 dada, nerm, ner1-5, eis2-6, st??, sei5, mloc, hit2, lhit): those resolve in shared/common DATs.
-Other chunk types: 0x20 skeleton, 0x29 (skeleton-adjacent), 0x2A mesh, 0x2B motion clip (names
-idl0 wlk0 run0 at00 at10 at20 btl0 ded0 cor0 ...), 0x3D sound sample (dam1-4 atk1-4 swy1-3 ...),
-0x45 info, 0x00 terminator. Non-0x07 chunks are still probed for stage streams, so a scheduler under
-another id would be reported with that id.
+Other chunk types (CORRECTED 2026-10-03 against kuluu's own ChunkKind table, ffxi-dat/src/kind.rs,
+and by reading the bodies: kind 0x20 chunks carry 'TXD' texture data): **0x20 = Img/texture**,
+**0x29 = Bone/skeleton** (30-byte bone records from +0x04, count u8/u16 at +0x02; the look-at limit
+records sit after the 26-byte reference table at refs_end+0x48, stride 12 - see docs/lookat.md section E),
+0x2A = VertexOs2 mesh, 0x2B motion clip (names idl0 wlk0 run0 at00 at10 at20 btl0 ded0 cor0 ...),
+0x3D sound sample (dam1-4 atk1-4 swy1-3 ...), 0x45 info, 0x00 terminator. The old line here had
+0x20/0x29 swapped ('0x20 skeleton') and cost a whole replication pass against textures - do not
+re-trust it. Non-0x07 chunks are still probed for stage streams, so a scheduler under another id
+would be reported with that id.
 """
 import argparse, csv, mmap, os, struct, sys
 from collections import Counter, defaultdict
