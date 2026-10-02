@@ -135,6 +135,10 @@ Both construction sites (`0x5F476/0x5F47F`, `0x5FA49/0x5FA4F`) live inside **one
 `[web]` rule stays, but it becomes **per-region: check each address; never blanket-assume a match or
 a mismatch** (`XiZone`'s singleton differs).
 
+> **Correction (later pass).** This section said the jump table has *196* entries and that the case
+> index equals the stage type byte. Both were wrong, and they are the origin of the bogus `0x87/0xA8`
+> record markers in §8 — see §9.1 and §10 for the dispatch bytes (`case = type − 2`, **194** entries).
+
 Each task type has its own interpreter opcode case (index = position in the 0x5DC1C table; handler =
 nearest preceding table target for the site):
 
@@ -412,7 +416,15 @@ the bytes we guessed.
 4. Rare-type counts come from a *linear dump*, not from live dispatch: if some stream never reaches these
    bytes because it terminates earlier, `A9` may be over- or under-represented relative to runtime.
 
-### 9.5 Where that leaves S3 and plan B **[I]**
+### 9.5 Status of this section — superseded in part by §10 **[I]**
+
+Two claims here were later closed or re-ranked, and §9 should be read with that on top: the
+"identity unproven / ±1 attribution" caveat is **closed** (the dispatch rule is `case = type − 2`, so
+`0xA9` *is* ActorRotation — see §10), and this census is **navigation and corroboration only**: a data
+survey cannot define a record's meaning, the consumer code can ([summary.md](summary.md) §3).
+What survives: the marker falsification (9.1), the raw counts (9.2/9.3), the blind spots (9.4).
+
+### 9.6 Where that left S3 and plan B at the time **[I]**
 
 * **Plan B (data-driven drive-tasks) survives** — authored magnitudes exist in the same streams the
   interpreter feeds, and `0xA9`'s layout matches ActorRotation's operand reads.
@@ -425,3 +437,51 @@ the bytes we guessed.
   (3) only after that, chase `sqmdModelLookAt`'s one caller at `0x26E6D3` for the head's bone index and
   limit/slew. S1/S2 stay first in line for kuluu work: they are our own heading/clip-restart bugs and none
   of this blocks them.
+
+## 10. Dispatch rule + record identities closed (W pass; bytes re-verified here) **[V]**
+
+I re-derived the dispatch myself rather than accept it, because §5a/§8 got it wrong once already:
+
+```asm
+0x57FBB  mov  ecx, [esi+0x88]        ; scheduler ctx -> current stage record
+0x57FC2  mov  eax, [ecx]             ; record header dword
+0x57FC4  and  eax, 0xff              ; low byte = stage type
+0x57FC9  lea  edx, [eax-2]           ; *** case index = type - 2 ***
+0x57FCC  cmp  edx, 0xc1              ; bound => indices 0..0xC1 = 194 entries, types 0x02..0xC3
+0x57FD2  ja   0x5ac96                ; default handler (out-of-range lands here)
+0x57FD8  jmp  dword [edx*4 + 0x1005DC1C]
+```
+
+That single `lea edx,[eax-2]` explains the entire §9.1 confusion: **LockLookAt is stage `0x89`**
+(case 135) and **ActorRotation is stages `0xA9/0xAA`** (cases 167/168). The §8 markers `0x87/0xA8`
+came from assuming index == byte; that assumption was never true, which is exactly why `0x87` has zero
+occurrences.
+
+Also corrected here: **the jump table holds 194 entries, not the 196 counted in §5a.** A naive scan for
+pointers inside the interpret function's range runs two entries past the end, because out-of-range
+cases legitimately point at the default handler `0x5AC96`, which is inside that same window. Derive the
+count from the `cmp` bound (**[V]** — this is a trap worth remembering for any jump table in this build).
+
+### 10.1 §9's data now reads as confirmation of the consumer contract **[V]**
+
+| record | data found in shipped DATs | matches |
+|---|---|---|
+| **`0x89` LockLookAt** (case 135) | **504 records**, all `len=3`; **every byte after record+0x08 is zero**; the only operand is a signed 16-bit duration at `record+6`, taking just 13 distinct values (192 ×200, 800 ×133, 274 ×56, 84/98/86/178/148 …) | §5b/§8: args are (task, actor resolved from the runtime link slot, duration). **No angle, no limit** — now seen in data, not just inferred from absence |
+| **`0xA9` ActorRotation** (case 167) | 5 records (`ROM3\0\43.DAT`) with `pitch=+0.0f`, `yaw ∈ {+90,−90,−135,+45}`, `roll=+0.0f` at `+8/+C/+0x10` | the ctor's three ×π/180 conversions. The **mode byte at `record+0x14`** is the fifth payload dword — past kuluu's four-dword print cap, which is why §9.3 logged it as "unprinted" instead of reading it |
+| **`0xAA` ActorRotation variant** (case 168) | **zero occurrences** in any chunk-`0x07` stream of this install | not a contradiction; unobserved here. Coverage is still limited to chunk `0x07` (§9.4) |
+
+### 10.2 Byte cross-checks I ran against the W-pass look-at claims **[V]**
+
+- Float `pi/6` bits (`3F 0A 06 3F`) appear in `.text` at exactly two sites, `0xD5547` and **`0x26E567`**;
+  the latter sits inside W's model-slot init region ⇒ consistent with "one writer for the slot `+0x94`
+  yaw limit; default pi/6 is hard-coded".
+- In `sqmdModelLookAt` (`0x278E90..0x2790B1`) there is exactly **one** fpatan (`d9 f3`, at **`0x278FF9`**)
+  ⇒ consistent with "yaw only, no pitch computed anywhere in this path".
+
+### 10.3 What is still open on the data side **[I]**
+
+* Two authored-float carriers remain undecoded as *records*: stage **`0x28` (case 38)** — 6,234 records,
+  int + float ∈ {30,24,20,10,60,36,15}, spread over 5,259 files — and **`0x62` (case 96)** — 214 records,
+  always `(u16,u16) + 45.0f`. Read their handlers through the fetcher contract (§5b), not another census.
+* If coverage beyond chunk-`0x07` is ever needed, kuluu's reader needs two one-line fixes first (payload
+  print cap; `--all-types` KeyError). Both left untouched here per the research-only rule.

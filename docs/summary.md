@@ -1,433 +1,360 @@
-# FFXI retail client — research summary
+# FFXI retail client, research summary
 
 A cross-pass synthesis of what we have **verified** in `FFXiMain.dll` and what we
 **believe** the client does, for the purpose of bringing the kuluu remake to retail
 parity ("retail is king, dll is king"). Each section cites the pass that verified it.
 
-Passes: **M** = [movement.md](movement.md) (walker), **C** = [camera.md](camera.md)
-(event camera), **F** = [mob_animation.md](mob_animation.md) (animation driver), **T** =
-[target_track.md](target_track.md) (target-track), **J** = [joint.md](joint.md) (skeleton
-joint layer), **D** = [drivetask.md](drivetask.md) (overlay DriveTask layer). Conventions
-(RVA base 0x10000000, POL1-packed `.text`, evidence tiers) in [../README.md](../README.md).
+Passes: **M** = [docs/movement.md](movement.md) (walker), **C** = [docs/camera.md](camera.md)
+(event camera), **F** = [docs/mob_animation.md](mob_animation.md) (animation driver), **T** =
+[docs/target_track.md](target_track.md) (target-track), **J** = [docs/joint.md](joint.md) (skeleton
+joint layer), **D** = [docs/drivetask.md](drivetask.md) (scheduler drive tasks), **W** = walker look-at
+(this file, section 10; to be split into docs/lookat.md). Conventions (RVA base 0x10000000, POL1-packed
+`.text`, evidence tiers) in [../README.md](../README.md).
+
+**Builds.** M/T/J/D/W were cut against TDS **0x6A995428** (retail-2026-09, the current
+install; packed md5 fb7464073c06489268fdd9215c3e5313). F/C/E/U were cut against TDS **0x6A7297F5**
+(older). RVAs are build-specific. The event cluster sits at about -0x10 in the newer build
+(ExecProg 0xBC280, table 0xBC960, all 20 XiEvents patterns re-anchored, zero misses); other
+regions do not shift uniformly, check per region.
+
+**Unpacked image.** `unpack.py` (session_out/) produces `FFXiMain.unpacked.dll`, raw==virtual,
+OEP 0x31672F, offset == RVA. The POL1 packer is the LZSS in common.py, independently re-derived
+and matched. Only `.text` is packed. Headless pass artifacts (angr CFG 75,422 entries, r2 13,476,
+290 labels, 289 pypcode decomps) in `session_out/ffximain_headless_v1.zip`.
+
+Tiers: **[V]** = byte-verified in the DLL (pass cited); **[I]** = inference from verified parts;
+**[O]** = user's retail observation; **[web]** = outside source, navigation map only.
+
+---
 
 ## 0. WHY we are digging (do not lose this)
 
-We dig `FFXiMain.dll` for one reason: **kuluu's movement/animation feel is visibly wrong, and
-the user's standing ruling is "retail is king, dll is king" — no invented constants.** Each dig
-must pay for itself in a symptom the user can see in-game:
+We dig `FFXiMain.dll` for one reason: **kuluu's movement/animation feel is visibly wrong, and the
+user's standing ruling is "retail is king, dll is king" — no invented constants.** Each dig must pay
+for itself in a symptom the user can see in-game:
 
-| # | Symptom the user reported (paraphrased) | What the dig owes us |
-|---|----------------------------------------|----------------------|
-| S1 | While strafing a locked target, upper body/legs turn the wrong way; weapon vanishes with certain DAT choices | The retail rule for Head/Body/Legs/Weapon heading per state (no-target / target / locked), incl. "force toward target", not shortest-arc |
-| S2 | Idle↔walk shows a seam — same clip "restarting" instead of continuing from shared key points | How retail *stores and blends* keyframes (`sqmoKeyChannel`/`sqmoMixerMotion`), i.e. overlap/blend, not clip restart |
-| S3 | Head looks at the target to a limit then **snaps back straight**; body tugs slightly L/R; head turns on target change | The actual mechanism + numbers for limit / slew(reset) / tug — now believed to be **authored degree values fed to a DriveTask**, not a clamp constant |
-| S4 | Camera spring/leash feel (loaded by movement, pinned behind, catches up), and locked-camera catch-up ≤1 s bounded so it never swings past the player | Retail's spring/re-anchor law + its constants (M11/M15/M17/M18; leash value still not dll-verified) |
+| # | Symptom the user reported (paraphrased) | Status / what the dig owes us |
+|---|----------------------------------------|-------------------------------|
+| **S1** | While strafing a locked target, upper body/legs turn the wrong way; weapon vanishes with certain DAT choices | Open. Needs the retail Head/Body/Legs/Weapon heading rule per state (no-target / target / locked), incl. "force toward target" rather than shortest-arc (§4, §8) |
+| **S2** | Idle↔walk shows a seam — same clip "restarting" instead of continuing from shared key points | Open. Needs how retail stores/blends keyframes (`sqmoKeyChannel`/`sqmoMixerMotion`) rather than restarting clips (§6) |
+| **S3** | Head looks at the target to a limit then snaps back straight; body tugs slightly L/R | **Half resolved.** Limit/mechanism verified: yaw-only ±30° clamp on one dancer model slot per frame (W4/W5, §10). Still open: the release/snap-back angle, which bones/models are registered (the shoulder tug), and any slew easing (§9 items 1–2) |
+| **S4** | Camera spring/leash feel; locked-camera catch-up in ≲1 s without swinging past the player | Mostly verified as zoom/focal + re-anchor + spring-back (M17 corrected/M18, §5); the leash distance itself is still user-set, not dll-derived |
 
 **Acceptance test for any of these:** a kuluu build the user can drive — press keys, watch the
 character — where the symptom is gone *and* nothing else regressed. A doc-only conclusion that
 doesn't unblock one of S1–S4 is not progress.
 
-**Guardrails learned the hard way:** never quote a value we haven't read from bytes; label
-inference as inference; if the answer lives in DAT data rather than `.rdata`, say so early instead
-of guessing numbers.
+**Guardrails learned the hard way:** never quote a value we haven't read from bytes; label inference
+as inference; if an answer lives in DAT data rather than `.rdata`, say so early instead of guessing;
+and **read the consumer code, not a data census, to learn a record's meaning** (the DAT pass below,
+§2/§3: the census confirmed contracts but invented no schema).
 
 ### Oracles available (things that can answer us without guessing)
 
 | Oracle | What it gives | Trust posture |
 |---|---|---|
-| **Our unpacked `FFXiMain.dll`** (TDS 0x6A995428) | the only thing that is ground truth for *this* build | [V] after bytes are read |
-| **Live client observation** ([O]) | what retail *looks like*, which sets acceptance criteria | never explains mechanism; drives S1–S4 pass/fail |
-| **WGINC/DancingMad** @ 4243c7e — their master `FINDINGS.md` + pipeline map (see [dancer_engine.md](dancer_engine.md)) | names, class hierarchy, module census, struct shapes, vtable slot meanings | **[web]** — older PC build + PS2; RVAs unusable |
-| **PS2 `SCUS_972.66` DWARF v1** (Dec-2003 disc) | 2,758 named types with **every member name/offset/type**, 12,227 function symbols, 1,936 named `sq*` functions ⇒ *member names for our unnamed offsets* | [web]; PS2 renames this layer (`Kz*`/`Ym*`), and PC-only classes like the DriveTasks may have no DWARF counterpart |
-| **Their independent C++ reconstruction** + `ps2_dwarf_tools.zip` (DWARF-1 parser, class indexer, JSON type export) | third-party cross-check on any struct claim | [web] |
-| XIClient source | navigation only | already demoted ([§3](#3-bad-leads-found)) |
-
-Discipline adopted from DancingMad: **names that came from IDA/Lumina similarity are hints, not
-evidence** — a 33-byte body match is not a symbol.
-
-**Builds.** M/T/J were cut against TDS **0x6A995428** (retail-2026-09, the current
-install). F/C/E were cut against TDS **0x6A7297F5** (older). RVAs are build-specific; a
-few global addresses moved between builds (noted inline). Every RVA in the pass docs is
-only valid against that pass's build.
-
-Tiers used below: **[V]** = byte-verified in the DLL (pass cited); **[I]** = inference
-from verified parts; **[O]** = user's retail observation.
+| **Our unpacked `FFXiMain.unpacked.dll`** (TDS 0x6A995428) — `unpack.py`, offset == RVA | the only ground truth for *this* build | **[V]** once bytes are read |
+| **Live client observation [O]** | what retail *looks like*; sets pass/fail | never explains mechanism; drives S1–S4 |
+| **Real DATs** (install ROM dirs, dumped by kuluu's `dat_routines` reader) | which records/magnitudes actually ship in this install | corroborates or falsifies a contract; cannot define one (see the guardrail above) |
+| **WGINC/DancingMad** @ 4243c7e — master `FINDINGS.md`, pipeline map, dancer census ([dancer_engine.md](dancer_engine.md)) | names, class hierarchy, module census, struct shapes | **[web]** older PC build + PS2; RVAs unusable |
+| **PS2 SCUS_972.66 DWARF** (via DancingMad) — 2,758 named types with member offsets; plus their independent C++ recon | *member names* for structs we only have byte-offsets for | **[web]** strong hint; confirm layout against our bytes before use |
 
 ---
 
 ## 1. What we are looking for
 
-(This section predates §0 and is kept for continuity; §0 is authoritative.) The immediate
-target: the retail mechanism + numbers behind head/target-look, to replace kuluu's hardcoded model
-(`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`, `HEAD_SLEW_TAU_FRAMES` in
+The immediate target was the retail behavior behind the head/target look, to replace kuluu's
+hardcoded model (`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`, `HEAD_SLEW_TAU_FRAMES` in
 `kuluu-render/src/ffxi_actor_render.rs` ~3241, plus the state-2 body behavior in
 `kuluu/src/view_native/input.rs`):
 
-- **Head-look limit** — the max angle the head turns toward the target.
-- **Reset-to-straight** — how/when the head snaps back to straight.
-- **Head slew rate** — how fast the head turns.
-- **Body-tug** — the very small L/R body rotation that follows the head.
+- **Head-look limit**: **RESOLVED [V] (W4): 30.0 degrees, yaw only, hard default.** See section 10.
+- **Up/down**: **RESOLVED [V] (W5): none.** The walker look-at is horizontal only.
+- **Head slew rate**: open. The clamp is instantaneous in sqmdModelLookAt; any easing is upstream
+  in how the target position is fed per frame, or downstream in the joint integrator (J).
+- **Reset-to-straight (snap back)**: open (W open item 1).
+- **Body-tug (shoulder)**: mechanism located, numbers open (W open item 2).
 
-More broadly: a correct mental model of retail **walker**, **camera**, and
-**animation/skeleton** behavior, and how they interlock, so kuluu matches the *model*,
-not just a number.
+More broadly: a correct model of retail walker, camera, and animation/skeleton behavior so kuluu
+matches the model, not just a number. End state chosen by the user: **data-driven (B)**, kuluu
+implements the same consumers retail does and the authored data flows through.
 
 ---
 
 ## 2. Good leads found
 
-- **J pass — the skeleton joint integrator [V].** The per-joint update loop
-  (back-edge `jmp 0x4B87E`) does `joint_angle += dt × curve(global_clock)`, wrapped to
-  (−π, π]. `dt` is the frame tick (0x14CF0, via clock object 0x47BFA8 `+0xEB0`);
-  `curve` is a per-class keyframe evaluator (0x54500 linear / 0x547A0 smooth) driven by
-  the global animation clock 0x65CB14. **This is the strongest lead for the head
-  look-at**: an integrator of a velocity curve naturally produces *follow → saturate at a
-  limit → settle*, and a small-fraction body curve is exactly the "body tug." The user's
-  new note ("this is done in the skeleton pieces?") points here.
-- **T pass — target acquisition [V].** `LockedTarget` = 0x157CF0 (`[obj+0x21]==1` gate +
-  0x1598A0 entity-table scan) with fallback to the entity slot 0x487F58 (0x81600). This is
-  how the client knows *which* target to look at / steer toward. (The T-pass state machine
-  itself is inert — see §3.)
-- **M pass — the whole walker [V].** Control function 0xA65CB..0xA70AB: circle-walk
-  (W/S radial, A/D angular about the camera azimuth), the 0.05/0.9/1-3 speed bands, Q/E
-  rotating camera+body, camera re-anchor only while a key is held, spring-back. This is the
-  retail "polar / tank" walker, verified end to end.
-- **C pass — look-at basis + camera manager [V].** The look-at yaw is the **negated
-  atan2** (`fpatan(-(y2-y), x2-x)`), the same basis kuluu's round-12 look-at fix uses.
-  Camera manager singleton (0x4568FC+0x50 @ 0x6A995428 / 0x45693C+0x50 @ 0x6A7297F5) with
-  eye/look-at/direction fields.
-- **F pass — the animation driver [V].** Wire (0x0E status/sub, 0x28 action) → packed
-  RenderFlags → per-frame flush (0x95DB0) → actor create/destroy (CXiSkeletonActor, vtable
-  0x330F40) → sub→fourcc table (0x35AF60) → routine resolver (0xCE490, model DAT) →
-  scheduler nodes (actor +0x68) → stage stream (0x05 skeleton anim, 0x07 lock, 0x02 VFX,
-  0x0A sound, …). The complete mob-animation mechanism.
-- **J pass — the x87 flag-test idioms, decoded [V] (J10).** Every `fnstsw ax` →
-  `test ah, imm8` pair in `.text` uses one of four masks: `0x05` = ≥ / < , `0x44` = ≠ / = ,
-  `0x41` = above-or-unordered, `0x01` = C0 alone (per SDM Vol 2A Table 3-21). This unlocks
-  FPU branch structure generally — it closed the curve evaluators' u-vs-0.5 selection and
-  exposed their divide-by-zero guard, and it shows **no** dependence on sticky exception bits.
-  Details + reproduction recipe: [joint.md](joint.md) §8a.
-- **J pass — a real atan2 site at 0x5EA7F..0x5EA93 [V] (J11).** `faddp`/`fsqrt` then
-  `fpatan` and `fsubr dword [esi+0x94]`: an object angle minus the atan2 of two locals, i.e.
-  a plausible look-at/aim computation. The current lead for §9.
-- **D pass — the overlay mechanism itself: `CMo*DriveTask` [V].** The pose is not just
-  animated; it is *driven*. Tasks: `CMoLockLookAtDriveTask` (0x80),
-  `CMoActorRotationDriveTask` (0xA0), `CMoActorColorDriveTask` (0x88), `CMoLockColorDriveTask`
-  (0x7C), `CMoPathDriveActorTask` (0xB0) — siblings of `CMoSchedularTask`, located via Square's
-  own class-descriptor records (`{name,size,parent}`, 425 parsed) and the RTTI accessor thunks
-  that sit *in* their vtables. **This is the answer to "is look-at part of the animation or
-  layered on top": layered on top, by a named per-task overlay.** [drivetask.md](drivetask.md)
-- **D pass — rotation in this layer is authored in DEGREES [V].** `0x1032A9F4 = 0.0174527783`
-  (π/180) is referenced *only* inside `CMoActorRotationDriveTask` (0x5FA95, 0x5FABB, 0x5FACB).
-  Its update at **0x5FB30** lerps a from-tuple (`+0x80/+0x84/+0x88`) to a to-tuple
-  (`+0x90/+0x94/+0x98`) gated by a mode byte `+0x7c` ∈ {0,1,2} and a countdown `+0x74` against the
-  J-pass clock dt — offsets consistent with its descriptor size 0xA0. Prime hunting ground for
-  the S3 limit/slew/tug values as *arguments*.
-- **D pass — two different angle-wrap conventions exist [V].** DriveTask layer wraps with
-  `6.283` (0x10329D2C, deliberately inexact) and `±3.1415`; J pass's integrator uses exact ±π/2π
-  (`0x32A3B0/B4/B8`). Parity work must not assume a single wrap constant.
-- **D pass — the middleware is named [V].** Embedded build paths expose Square's *dancer*
-  modules: `sqMotion` (sqmoKeyChannel / sqmoMixerMotion ⇒ keyframes + blending for S2),
-  `sqHierarchy/sqhiNode`, `sqSkeleton/sqskJoint`, `sqModel/sqmdModel` (**`sqmdModelLookAt()`
-  takes a `<boneNdx>`, range-checked**), `sqOpcode` (matches F-pass stage stream). Full table in
-  [drivetask.md](drivetask.md) §1.
-- **DancingMad ingest — the `dancer` module census reproduces independently [V vs web ✓].**
-  Our own scan of `__FILE__` strings gives **16 modules / 84 source paths** ([tools/our_modules.py](../tools/our_modules.py));
-  their per-module file counts match on sqModel(7), sqMotion(12), sqSkeleton(3), sqHierarchy(1),
-  sqImage(5), sqConstraint(1), sqDeform(1). One known mismatch: `sqSkin` files (theirs 5, ours 4).
-  Full map in [dancer_engine.md](dancer_engine.md) §1.
-- **DancingMad class names verified present in OUR build [V].** Every name they rely on exists in
-  our descriptor table with sizes: `CMoLockLookAtDriveTask` 0x80, `CMoActorRotationDriveTask` 0xA0,
-  `CMoSchedularTask` 0x14A, `CMoSkeletonElem` 0x1D9, `CXiActorDraw` 0x34, the four-level actor
-  chain (Atel/Control/Collision/Skeleton = 0xD4/0x5C4/0x5F8/0xA0C), `CYyMotionQue` 0x40, `XiZone`
-  0x1DC ([tools/xcheck_dmad.py](../tools/xcheck_dmad.py)). Their recovery method — `class_descriptor_t`
-  nodes in `.rdata` — is the same structure our D pass found independently.
-- **Their actor vtable slot map, if it holds in our build, hands us S1's home [web].** Per-actor PC
-  draw hook = **slot 162** (not slot 8); slots **195–209** are the movement/animation lock queries
-  (`IsControlLock`, `IsDirectionLock`, `IsConstrain`, `IsFreeRun`, `IsWalkLock`, `IsParallelMove`);
-  slot 8 = per-frame update. Verify before coding against it.
-- **Their blending account is the leading hypothesis for S2 (idle↔walk seam) [web].** Pose scratch
-  filled by **5 base layers (slot 4→0, lower wins) + 2 blend layers** (`Quat_NLerp` rotation,
-  `Vec3_Lerp` translation/scale), gated by a per-bone byte mask (bit 6 = touched by a base layer this
-  update; bit 7 = bone accepts blends), same bits deciding interrupt-vs-queue. ⇒ retail *masks and
-  blends per bone* rather than restarting the whole pose.
-- **The interpreter address cross-confirms DancingMad, and refines how we use them [V].** Their
-  `CMoSchedularTask_Interpret 0x10057FB0 … jump table 0x1005DC1C` matches our bytes *exactly* (we
-  found that function and its **196-entry** table independently while locating the DriveTask
-  constructors). So `[web]` addresses must be checked **per region**: some coincide, some don't
-  (`XiZone`'s singleton differs). Never assume either way.
-- **Key globals [V]:** entity table (0x480AF0 @ 0x6A995428 / 0x480B30 @ 0x6A7297F5,
-  stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
-  clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
+- **W pass, the walker head-look is a dancer per-model look-at [V].** Every registered model has
+  a slot in dancer's model array; the slot carries bone index, limit, target position and an
+  enable flag; dancer's per-frame update calls `sqmdModelLookAt` which computes yaw = atan2 to the
+  target and clamps it to +-limit. Default limit = pi/6. Section 10.
+- **D pass, the scheduler task contract [V].** `CMoSchedularTask_Interpret` (0x57FB0) walks the
+  DAT 0x07 routine stage stream; `case = type_byte - 2` (194 cases, table 0x5DC1C). Stage 0x89 =
+  LockLookAt (alloc 0x80), 0xA9/0xAA = ActorRotation (alloc 0xA0, two variants). Record layout
+  fully read. Section 6.
+- **Corroboration of that contract from the shipped DATs (DAT pass, [drivetask.md](drivetask.md) §9).**
+  Dumping every `*.DAT` under the install (52,989 files → 178,142 chunk-`0x07` streams, 450,253 stage
+  lines; census in [`../tools/dat_stage_scan.py`](../tools/dat_stage_scan.py)) lands on the predicted
+  records: **stage `0x89` appears 504×, always `len=3`, payload nothing but a duration** (e.g. s16 at
+  record+6 = 274) — data-side proof of "LockLookAt carries no angle"; and the five real **`0xA9`
+  ActorRotation** records (`ROM3\0\43.DAT`) carry `(pitch=0, yaw ∈ {+90,−90,−135,+45}, roll=0)` exactly
+  at `+8/+C/+0x10`. Two things the code read alone did not tell us: **stage `0xAA` never occurs** in this
+  install's streams (the second ActorRotation variant is unobserved, rare), and stage types we have not
+  decoded — `0x28` (6,234 records / 5,259 files, int + float ∈ {30,24,20,10,60,36,15}) and `0x62` (214,
+  always `(u16,u16)+45.0f`) — are the *authored-float* carriers to read consumer-side next.
+- **J pass, the skeleton joint integrator [V].** Per-joint `angle += dt x curve(clock)`, wrapped
+  to (-pi, pi]; per-class keyframe evaluators 0x54500 (linear) / 0x547A0 (smooth); clocks
+  0x47BFA8 (+0xEB0 = dt) and 0x65CB14.
+- **T pass, target acquisition [V].** `LockedTarget` = 0x157CF0 (`[obj+0x21]==1` gate + 0x1598A0
+  scan) with fallback to entity slot 0x487F58 (0x81600).
+- **M pass, the whole walker [V].** Control function 0xA65CB..0xA70AB: circle-walk, 0.05/0.9/1
+  speed bands, Q/E rotating camera and body, re-anchor only while a key is held, spring-back.
+- **C pass, look-at basis + camera manager [V].** Event look-at yaw is the negated atan2; camera
+  manager singleton 0x4568FC+0x50 (@0x6A995428) / 0x45693C+0x50 (@0x6A7297F5).
+- **F pass, the animation driver [V].** Wire (0x0E/0x28) -> RenderFlags -> per-frame flush
+  (0x95DB0) -> actor create/destroy (CXiSkeletonActor, vtable 0x330F40) -> sub->fourcc table
+  (0x35AF60) -> routine resolver (0xCE490) -> scheduler nodes -> stage stream.
+- **Outside oracles [web]:** WGINC/DancingMad @4243c7e (dancer 16-module census, 136-class
+  hierarchy, skinning pipeline; cross-checked against our build in docs/dancer_engine.md), its PS2
+  SCUS_972.66 DWARF (2,758 named types with member offsets), its independent C++ recon. All
+  navigation maps; the DLL is ground truth.
+- **Key globals [V]:** entity table 0x480AF0 (stride 4, XiAtelBuff); CXiSkeletonActor vtable
+  0x330F40 (64 slots); clock 0x47BFA8; tick 0x14CF0; anim clock 0x65CB14; dancer model array base
+  [0x1099AED0], count [0x1099AECC].
 
 ## 3. Bad leads found
 
-- **T-pass state machine — inert in 0x6A995428 [V].** The ±44.987° bracket
-  (0xA80D0 + sibling 0xA82A0) is overflow-flag-gated and returns only {0,1}; `state_0x598`
-  is never written 2/3/4 (7-writer census). The **0.125** ease rate (0x32A3BC) and the
-  **±44.99°** bracket are **not** the live head numbers. *Do not port 0.125 or ±44.99°
-  into kuluu.*
-- **16-step compass (0xA7851) — dead [V].** 0 callers in the build.
-- **0x487F98 auto-run slot — read-only, zero [V].** Single `.text` reference; dead.
-- **Left/right arrow yaw — dead in this build [V] (M19).** The key slots are zero-cleared
-  before the multiply; there is no retail arrow-yaw rate to port.
-- **`[obj+0xE0]` as a unique joint slot — wrong [V] (J9).** It is a generic offset: 222
-  accesses / 28 writes across the binary. The prior 13-site "census" missed the
-  `fstp`/`fst` (D9 9x / DD 9x) stores. Track the joint *object*, not the offset.
-- **0x3138BA as fmod — wrong [V] (J3).** It is `mov edx, 0x103CFFE0; jmp 0x31DD30`, an FPU
-  helper/exception thunk.
-- **Per-entity update (0x8F000..0x93500) as the head-limit home — no [V] (J8).** Zero FPU
-  compares against `.rdata` constants in that region; the limit is not a dot-vs-const
-  clamp there.
-- **"Corrupted capstone x87 table" — wrong [V] (J10).** Capstone 5.0.7 decodes every
-  disputed D8–DB cell correctly; `DB F8..FF` is *genuinely invalid* (`<undecoded>` is right)
-  and **FCOMIP = `DF F0+i`**, not a `DB` encoding. The real failure mode is **linear-sweep
-  alignment** — decoding that starts mid-instruction drifts into interleaved float constant
-  pools; capstone's `skipdata=True` recovers on its own. Patching decode tables would inject
-  wrong instructions, so no tool change was made. M17/M20/J1–J9 are unaffected (they use
-  memory-operand forms that always decoded correctly).
-- **"Double-fpatan look-at controller at 0x5EA03 / 0x5EF03" — wrong [V] (J11).** Both RVAs
-  hold `33 C0` = `xor eax, eax`: sweep artifacts, not instructions. Chase 0x5EA7F..0x5EA93
-  instead.
-- **A specific vtable slot index for 0x5E9C0 — unverifiable today [V].** A code-pointer-run
-  scan puts the pointer to it at `+0x134` inside one contiguous run starting `.rdata 0x32B890`
-  (≥ 505 entries). Adjacent tables merge into a single apparent run, so slot numbers there are
-  meaningless until real vtable boundaries are established.
-- **XIClient source as ground truth — unreliable [O/I].** Used only as a navigation map for
-  *where to look*; its layout (e.g. the view matrix) conflicts with the retail C2 layout.
-  Every finding is verified in the DLL, not taken from XIClient.
-- **"Interpreter case index = scheduler stage type byte" (`0x87` = LockLookAt, `0xA8` = ActorRotation)
-  — falsified against data [V] (DAT pass).** Across all 178,142 parsed scheduler streams `0x87` never
-  occurs at all, and the ten `0xA8` occurrences are two-int records too short to carry the operand set
-  ActorRotation's ctor provably consumes. The authored magnitudes *do* exist in these streams — under other
-  stage bytes (see [drivetask.md](drivetask.md) §9). Treat every case↔byte mapping as unproven until the
-  jump-table attribution is re-derived.
+- **CMoLockLookAtDriveTask as the walker mechanism, no [V] (W1).** Its only spawner is the
+  scheduler stage handler (case 135); the second vtable install at 0x5F660 is its destructor.
+  It is cutscene/action playback, triggered by routine streams the server kicks off. The walker
+  never touches it.
+- **"Authored head degrees" in script data, no [V] (D).** The 0x89 LockLookAt record carries only
+  a duration (s16 @+6). No angle, no limit, no target. Only ActorRotation (0xA9/0xAA) carries
+  authored degrees (pitch/yaw/roll @+8/+C/+0x10, x pi/180 in ctor 0x5FA20).
+- **DAT census for operand schemas, wrong method.** The consumer code defines the contract; the
+  record walker (0x57C20) and fetchers (0x5E590, 0x62770/0x627D0) gave the full layout in four
+  reads. Stage-byte guesses 0x87/0xA8 were off by the `-2` in the dispatch.
+- **0x5EA03 / 0x5EF03 "double-fpatan look-at controller", no [V].** Both are `33 C0` = `xor eax,
+  eax`, linear-sweep desync artifacts. The real fpatan near there is 0x5EA8B.
+- **"Corrupted capstone x87 table", no [V].** capstone 5.0.7 decodes every disputed D8-DF mod=11
+  cell correctly; DB F8-FF is genuinely invalid (FCOMIP is DF F0+i). Root failure was sweep
+  alignment, not opcode tables. No tooling change.
+- **T-pass state machine, inert in 0x6A995428 [V].** +-44.987 deg bracket (0xA80D0, 0xA82A0) is
+  overflow-flag-gated and returns only {0,1}; `state_0x598` never 2/3/4. Do not port 0.125 or
+  +-44.99 deg.
+- **M17 as pitch, no [V].** 0x32A3D8/0x32A3D4/0x32A3DC hold 900.0/242.0/350.0 (not 23/10/15);
+  23.0f does not exist in .rdata; the block stores via the focal setter 0x15290. It is the zoom
+  (focal) integration. The degree values leaked from the XIClient transcription.
+- **M20 kbd scale 1/64, no [V].** 0x32A778 = 0.0078125 (1/128), verified in 0x120C70. Held Q/E
+  azimuth = 0.10667 x 127/128 = 0.1058 rad/s (~6.06 deg/s), half of what was ported.
+- **16-step compass (0xA7851), dead [V]. 0x487F98, read-only zero [V]. L/R arrow yaw, dead [V]
+  (M19). `[obj+0xE0]` as a unique joint slot, no [V] (J9). 0x3138BA as fmod, no [V] (J3).**
+- **XIClient source as ground truth, unreliable [O/I].** Navigation only.
 
-## 4. How we think the ffxi **walker** works (M pass)
+## 4. How we think the ffxi walker works (M pass)
 
-- One function, **0xA65CB..0xA70AB**, runs on the per-frame local-player tick [V].
-- Reads analog axes from the input manager (0x57876C): **W/S = action 4, A/D = action 5
-  (sign-inverted), Q/E = actions 6/7** [V] (M16).
-- Builds `dir = {-key2·speed, 0, key1·speed}` in world axes [V] (M4).
-- **Speed/deadzone law** (0xA78D0) [V] (M3): `mag=√(k1²+k2²)`; `mag≤0.05`→stand;
-  `0.05<mag≤0.9`→walk (×1/3); `mag>0.9`→run (×1.0). Axes are normalized first, so a W+D
-  diagonal is a unit vector (**diagonals move at full speed, not √2**). Scale stored at
-  `actor+0x594`.
-- **Circle-walk** (0xA79A0) [V] (M5): `dir` is rotated by the **camera azimuth**
-  (`fpatan(-[cam+0x2C],[cam+0x24])`). So **W/S move along the camera axis (radial), A/D
-  move perpendicular (angular, around the camera position)**. This is the retail
-  "polar / tank-style" walker.
-- Ground re-orthogonalization; in air `dir ×= 0.25` [V] (M8).
-- `dir ×= dt` (0x14CF0 tick) [V] (M4).
-- Contact gate (0xA8770) then `*pos += dir` inline (0xA6F31) [V] (M9). Live position at
+- One function, **0xA65CB..0xA70AB** (func start ~0xA6240), on the per-frame local-player tick [V].
+- Axes from the input manager (0x57876C): W/S = action 4, A/D = action 5 (sign-inverted), Q/E =
+  actions 6/7 [V] (M16). Keyboard axis = `(int8)(kbd+0x250 - 0x80) x 1/128` (0x120C70) [V].
+- `dir = {-key2 x speed, 0, key1 x speed}` in world axes [V] (M4).
+- Speed/deadzone (0xA78D0) [V] (M3): `mag <= 0.05` stand; `0.05 < mag <= 0.9` walk (x1/3);
+  `mag > 0.9` run (x1.0). 0.9 lives at 0x32C9A4 (fcom at 0xA7918). Axes normalized first, so a
+  W+D diagonal is a unit vector. Scale stored at `actor+0x594`.
+- Circle-walk (0xA79A0) [V] (M5): `dir` rotated by the camera azimuth. W/S radial, A/D angular.
+- Ground re-orthogonalization; in air `dir x= 0.25` [V] (M8). `dir x= dt` (0x14CF0) [V].
+- Contact gate (0xA8770) then `*pos += dir` inline (0xA6F31) [V] (M9). Live position
   `ent+0xD4/+0xD8/+0xDC` [V] (M14).
-- **Facing** (M10) [V]: the body faces the **direction of travel** (or the
-  camera-rotated input while turning); `yaw = -fpatan(dir.z, dir.x)` → `actor+0xE8`. The
-  camera never drags the facing.
-- **Q/E** (M15) [V]: drives **both** the camera azimuth (integrates `cam+0x48`) and the
-  body heading (re-assigned to keep facing travel). Not a rotate-in-place.
-- **Camera re-anchor** (M11) [V]: the camera re-anchors to the player **only while a
-  movement key is held**; otherwise it stays where the user aimed it (the free camera).
-- **Auto-run** (M6) [V]: flag 0x487F81 + unit vector 0x487F64..; overwrites the movement
-  vector; forward-hold rotates it (circle-turn).
+- Facing (M10) [V]: body faces travel; `yaw = -fpatan(dir.z, dir.x)` -> `actor+0xE8`.
+- Q/E (M15) [V]: drives camera azimuth (`cam+0x48`) and body heading.
+- Camera re-anchor (M11) [V]: only while a movement key is held.
+- Auto-run (M6) [V]: flag 0x487F81 + unit vector 0x487F64.
 
-## 5. How we think the ffxi **camera** works (M + C pass)
+## 5. How we think the ffxi camera works (M + C pass)
 
-- **Camera manager** singleton: 0x4568FC+0x50 (@0x6A995428) / 0x45693C+0x50
-  (@0x6A7297F5) [V]. Fields: `+0x24/+0x2C` horizontal direction (x,z); `+0x44..+0x4C`
-  cached eye; `+0x50..+0x58` cached look-at [V] (M12/C2).
-- **Free (unlocked) camera** [I from M11 + O]: it does **not** continuously follow the
-  player. It re-anchors only while movement keys are held; the user aims it (mouse/Q/E)
-  and it "sits" until re-anchored or the radial distance leaves its band.
-- **Q/E** integrates the azimuth (`cam+0x48 += tick·axis6·0.10666667`) [V] (M15).
-- **Zoom (focal)** integrates `±tick·6.0` focal units, clamped 900.0 / 242.0;
-  both zoom keys snap the focal to the 350.0 third-person default on the next
-  frame; the mouse wheel is the same path [V] (M17). FOV = 2·atan2(192, focal)
-  [web, E15]: 242 ≈ 76.9°, 350 ≈ 57.5°, 900 ≈ 24.1°.
-- **Spring-back** (M18) [V]: mode byte 0x456DB0 + reference angle 0x456DB4; when the turn
-  keys come up the camera eases back toward the reference (the "catch-up" the user sees).
-- **Locked camera** [O + I]: when a target is locked the camera **focuses the target** and
-  catches up smoothly (fast, ~≤1 s, bounded so it doesn't swing past the player); Q/E and
-  arrows do nothing while locked. The catch-up reuses the same spring, at a tiny value.
-- **Event camera** (C pass) [V]: look-at opcodes 0x4A/0x79/0x1E pose actors with the
-  **negated atan2** basis; 0x46 DEFCAMERA enables/disables user control and restores
-  position; work-slot↔camera scale is **1/32** (0x32A22C); focal 280 (first-person) /
-  350 (third).
+- Camera manager singleton: 0x4568FC+0x50 (@0x6A995428) [V]. Fields: `+0x24/+0x2C` horizontal
+  direction; `+0x44..+0x4C` eye; `+0x50..+0x58` look-at [V] (M12/C2).
+- Free camera [I from M11 + O]: does not continuously follow; re-anchors only while keys are held.
+- Q/E azimuth: `cam+0x48 += tick x axis6 x 0.10666667` [V] (M15); effective held rate 0.1058
+  rad/s with the 1/128 axis scale.
+- **Zoom (focal), not pitch** [V] (M17 corrected): `focal += +-tick x 6.0`, clamped 242.0..900.0,
+  both-keys ease toward 350.0 at x0.25/frame, mouse wheel same path, stored via 0x15290.
+  `FOV = 2 x atan2(192, focal)`; 280 first-person / 350 third.
+- Spring-back (M18) [V]: mode byte 0x456DB0 + reference angle 0x456DB4.
+- Locked camera [O + I]: focuses the target, catches up smoothly; Q/E and arrows inert while locked.
+- Event camera (C pass) [V]: 0x46 DEFCAMERA, work-slot <-> camera scale 1/32 (0x32A22C).
 
-## 6. How we think the ffxi **animation / skeleton** works (F + J pass)
+## 6. How we think the ffxi animation / skeleton works (F + J + D pass)
 
-Two layers: the **driver** (F pass) picks *which routine/clip* to play; the **skeleton**
-(J pass) turns that into *joint angles*.
+Three layers: the **driver** (F) picks which routine/clip to play; the **scheduler task
+interpreter** (D) executes a routine's stage stream, spawning drive tasks; the **skeleton** (J)
+turns that into joint angles.
 
-**Driver (F pass) [V]:**
-- Server 0x0E (status/anim/sub) and 0x28 (action) are **not stored** in named fields;
-  status is XOR-diffed into `RenderFlags0`, sub packed into `RenderFlags1` (0x9BCF7).
-- Per-frame flush (0x95DB0) rebuilds the actor when RF3 bit 0 is set: destroy (0x92910) /
-  create (0x8F750) a `CXiSkeletonActor` (ctor 0xC525E, vtable 0x330F40). INVISIBLE
-  (status 3) = destroy; the next status 1 = fresh create (so `init` replays).
-- A sub change plays `table[sub]` from 0x35AF60 (`[init ini1 ini2 ini3]×2`) via actor
-  slots +0x298/+0x29C. The fourcc is resolved by 0xCE490 against the **model DAT** (then
-  shared libs). The routine's stage stream is copied into scheduler nodes (actor +0x68).
-- Stage ops: 0x05 skeleton animation (clip fourcc + frames), 0x07/0x59 animation lock
-  (ActionTimer1 refcount), 0x02 VFX generator, 0x0A/0x0B/0x4A sound, 0x03/0x09 call
-  routine on source/target, 0x5E knockback, … (full ~85-op list in F §3.5).
+**Driver (F pass) [V]:** server 0x0E/0x28 XOR-diffed into RenderFlags; per-frame flush (0x95DB0)
+rebuilds the actor; a sub change plays `table[sub]` from 0x35AF60 via actor slots +0x298/+0x29C;
+the routine's stage stream is copied into scheduler nodes (actor +0x68).
 
-**Skeleton (J pass) [V]:**
-- Each joint's angle is **integrated**, not snapped: `angle += dt × curve(anim_clock)`,
-  wrapped to (−π, π] (loop back-edge `jmp 0x4B87E`). Three sibling slots: `+0xE0`, `+0xE4`,
-  `+0xE8`; an "updated" flag at `+0x187`.
-- `curve` = a per-class keyframe evaluator over (x,y) points at table+0x30/+0x38/…:
-  0x54500 (linear lerp) or 0x547A0/0x546F0 (quadratic "smooth", branch taken iff u ≥ 0.5 —
-  resolved via the flag idioms, J10; includes a divide-by-zero guard when two segment
-  boundaries compare equal).
-- Driven by the **animation clock 0x65CB14** and the **frame dt** (0x47BFA8 `+0xEB0` =
-  0x14CF0). Per-joint param struct: `{word (6-bit index at bits 13–18), scale@+4,
-  scale2@+8}`.
-- **Interpretation [I]:** the retail head/body motion is therefore *data-driven* — the
-  limit/slew/reset are properties of the authored velocity curves + the integration, not a
-  single clamp+slew constant. This matches the observed "follow to a limit, settle, body
-  tugs slightly."
+**Scheduler task interpreter (D pass) [V]:**
+- Record walker 0x57C20: stream at `res+0x78`; each record `u32 header`, low byte = type, bits
+  8..12 = length in dwords, type 0 ends. Same format dat_routines.py parses.
+- Dispatch 0x57FC2: `case = type_byte - 2`, 194 cases (bytes 0x02..0xC3), table 0x5DC1C.
+- Operand fetchers: `0x5E590` = duration = `s16 @ rec+6` x `task+0x9C` (time scale) ->
+  `ftoi_round` (0x311C2C) -> frames. `0x62770` / `0x627D0` resolve the actor from the task's
+  runtime link slot (`this+0x34`, walking `+0xC4` past kind-0x32F910), never from the record.
+- **Stage 0x89 (case 135) LockLookAt**: alloc 0x80; args (task, actor, duration). Nothing else.
+- **Stage 0xA9 (case 167) / 0xAA (case 168) ActorRotation**: alloc 0xA0; `rec+0x08` f32 pitch,
+  `+0x0C` f32 yaw, `+0x10` f32 roll (degrees), `+0x14` u8 mode; ctor 0x5FA20 multiplies by
+  pi/180 at 0x5FA95/AB/CB. The two variants differ only in which end of the link the actor is.
+- These are cutscene/action playback (server-triggered routines). kuluu's B substrate needs this
+  consumer for emotes/actions; it is not the walker.
+
+**Skeleton (J pass) [V]:** each joint integrates `angle += dt x curve(anim_clock)`, wrapped to
+(-pi, pi]; evaluators 0x54500 (linear) / 0x547A0 (smooth); 12 dispatch sites 0x4B819..0x4D40D.
 
 ## 7. How we think ffxi works (top-level)
 
-- `FFXiMain.dll` ships with `.text` rawsize 0 and a **POL1** bit-packed section; an entry
-  stub unpacks the real code at load (0xBB1A60/0xBB1AFB). All game logic is in this DLL
-  [V] (F24/F25).
-- World state = a **global entity table** (`XiAtelBuff`, 684 bytes, stride 4, indexed by
-  target index) [V] (F28). Each entity that has a visible model owns a
-  `CXiSkeletonActor` (`ActorPointer` at +0xA0) [V].
-- A **per-frame tick** (0x14CF0, ~1/60 s, clamped ≤ 1.0) drives [V] (M20):
-  - **Local player** → control function 0xA65CB (input → movement → position + facing).
-  - **All entities** → per-entity update 0x8F750 + flush 0x95DB0 (flags → animation).
-  - **Camera** → camera-manager update (Q/E, mouse, zoom (focal), re-anchor, spring-back) + events.
-  - **Skeleton** → per-joint integrator (angle += dt × curve).
-  - **Event VM** → cutscene opcodes.
-- **Server→client:** 0x0E (status/anim/sub), 0x28 (action), POS (position) packets set
-  entity flags; the client animates. **Client→server:** the client is authoritative for
-  local movement/camera and reports position back (0x47/0x5C). The client is king for
-  *feel* (rendering, animation, movement, camera); the server is king for *rules* [I].
+- `FFXiMain.dll` ships `.text` rawsize 0 with a POL1-packed section; the entry stub unpacks at
+  load (OEP 0x31672F). All game logic is in this DLL [V]. Two source trees: `C:\dev\dancer\sq*`
+  (Square's in-house middleware, C, 16 modules) and `D:\build0001\FFXi_Win\` (the game, C++) [V].
+  RTTI is compiled out; class names exist as allocator/debug tag strings (113 extracted) [V].
+- World state = global entity table (XiAtelBuff) [V]. Each visible entity owns a CXiSkeletonActor [V].
+- Per-frame tick (0x14CF0) drives: local player (control fn), all entities (0x8F750 + 0x95DB0),
+  camera, skeleton integrator, event VM, and dancer's per-model update (0x26E4C2, look-at apply).
+- Client is king for feel; server is king for rules [I].
 
 ## 8. How we think they all talk to each other
 
 ```
 Keyboard / Mouse
-   │
-   ▼
-Input Manager (g_pCTkInputCtrl @0x57876C)
-   │  axes: W/S=4, A/D=5, Q/E=6/7  +  discrete key checks
-   ▼
-Control Function 0xA65CB  (local-player tick)
-   ├─ speed/deadzone (0xA78D0) ─────────────► scale
-   ├─ circle-walk (0xA79A0): dir ×= RotateY(cam azimuth)
-   │        ▲ reads camera direction (+0x24/+0x2C)
-   │        │
-   │   ┌────┴───────────────────────────────┐
-   │   │ Camera Manager (0x4568FC+0x50)     │
-   │   │  ← Q/E (azimuth cam+0x48), mouse,  │
-   │   │    zoom, re-anchor (M11),          │
-   │   │    spring-back (M18), event 0x46   │
-   │   │  focus = player (free) / target    │
-   │   │           (locked)                 │
-   │   └────────────────────────────────────┘
-   ├─ target-track (0xA7B80) if target exists
-   │        ▲ LockedTarget 0x157CF0 / slot 0x487F58
-   ├─ dir ×= dt (0x14CF0)  →  contact gate (0xA8770)
-   └─ *pos += dir (0xA6F31);  facing = direction of travel (M10)
-   │
-   ▼
-Entity (XiAtelBuff)  ◄── server 0x0E / 0x28 / POS set RenderFlags
-   │
-   ▼
-per-entity update 0x8F750  +  flush 0x95DB0
-   ├─ actor create/destroy (CXiSkeletonActor, vtable 0x330F40)
-   └─ sub → fourcc (0x35AF60) → routine (0xCE490, model DAT) → scheduler nodes
-            │
-            ▼
-       stage stream (0x05 anim, 0x07 lock, 0x02 VFX, 0x0A sound, …)
-            │
-            ▼
-   Skeleton joint integrator (J pass):  angle += dt × curve(anim_clock 0x65CB14)
-            │   head curve ◄── target position   (head look-at — OPEN)
-            │   body curve ◄── small fraction    (body tug — OPEN)
-            ▼
-       bone matrices → render
+   |
+   v
+Input Manager (0x57876C)  axes W/S=4, A/D=5, Q/E=6/7; kbd axis x 1/128
+   |
+   v
+Control Function 0xA65CB (local-player tick)
+   |- speed/deadzone (0xA78D0) -> scale
+   |- circle-walk (0xA79A0): dir x= RotateY(cam azimuth)
+   |      ^ Camera Manager (0x4568FC+0x50): Q/E azimuth cam+0x48, zoom 242..900 ease 350,
+   |        re-anchor (M11), spring-back (M18), event 0x46
+   |- target-track (0xA7B80) if target: LockedTarget 0x157CF0 / slot 0x487F58
+   |- dir x= dt (0x14CF0) -> contact gate (0xA8770)
+   |- *pos += dir; facing = direction of travel (M10)
+   |
+   |  [game side] registers look-at on the actor's model(s):
+   |     slot.bone = <bone idx>, slot.target = target pos (per frame), slot.flags |= 0x200
+   v
+dancer model array [0x1099AED0] (stride 0xAC per registered model)
+   |  per-frame update 0x26E4C2 -> for each model with flag 0x200:
+   |     sqmdModelLookAt(model, 0, bone, &target, limit)      0x278E90
+   |        yaw = atan2(delta); clamp +-limit (default pi/6 = 30 deg)
+   |        rot = single-axis(yaw) (0x27ABA0); node+0x68 = rot * node  (one bone)
+   v
+Entity (XiAtelBuff) <-- server 0x0E / 0x28 / POS set RenderFlags
+   |
+   v
+per-entity update 0x8F750 + flush 0x95DB0
+   |- actor create/destroy (CXiSkeletonActor, vtable 0x330F40)
+   |- sub -> fourcc (0x35AF60) -> routine (0xCE490, model DAT) -> scheduler nodes
+   v
+scheduler task interpreter 0x57FB0: case = type-2 over the stage stream
+   |- 0x89 LockLookAt(duration) / 0xA9,0xAA ActorRotation(pitch,yaw,roll deg, duration) / ...
+   v
+Skeleton joint integrator (J): angle += dt x curve(anim_clock 0x65CB14)
+   v
+bone matrices -> render
 ```
-
-The shared **clock** (0x14CF0 dt + 0x65CB14 anim clock) is the common heartbeat: it scales
-the walker (`dir ×= dt`) and integrates the skeleton (`angle += dt × curve`). The
-**camera manager** is the shared pose source: the walker reads its azimuth, and Q/E /
-mouse / re-anchor / events write it. The **target** (LockedTarget / 0x487F58) is the shared
-"what am I looking at" that feeds target-track (steering + facing) and — we believe — the
-head look-at curve.
 
 ## 9. Where we are looking next
 
-**The head limit/slew/tug — now with a better lead than "somewhere in the curves".** The D pass
-found the overlay layer that actually rotates actors toward things (`CMoLockLookAtDriveTask` /
-`CMoActorRotationDriveTask`, driven by degree-denominated authored values), **and we now know who
-creates them**: interpreter opcode cases **135** and **168** inside `CMoSchedularTask_Interpret`
-(`0x57FB0..0x5DFF0`; jump table `.rdata 0x5DC1C`, 196 entries) — [drivetask.md](drivetask.md) §5a.
-No float immediates appear in either handler, so the limit / duration / degree magnitudes are
-**operands in authored effect-script data**.
+**Walker look-at (W), two open reads:**
+1. **Release / snap-back [O].** The verified path is a clamp, which pins the head at 30 deg; the
+   user observes a release past the limit. Either sqmdModelLookAt's caller zeroes the look-at when
+   the raw yaw exceeds the limit (check the caller at 0x26E6C4..0x26E6E9 and the result globals
+   0x1099AF48..AF54), or the game side disables it (0x27021C sets bone = -1) past a cone. One of
+   those holds the release angle.
+2. **Shoulder [O].** sqmdModelLookAt rotates exactly one bone; no chain distribution. The small
+   shoulder turn is therefore a second registration (FFXI characters are multi-model; the body
+   model has its own slot and could register a spine bone) or hierarchy inheritance. The game-side
+   bone setters (0x2701EA, 0x26FA59, and 0x27021C disable) have no direct E8 callers, so they are
+   vtable-dispatched: resolve via tables_vtables.csv / angr callgraph, read the callers, and that
+   gives exactly which models and bones the walker registers, and whether the body slot's limit
+   or +0x84 weight differs from the head's.
 
-**Operand encoding is now known [V] ([drivetask.md](drivetask.md) §5b):** the interpreter's fetcher
-`0x1005E590` reads a **signed 16-bit authored integer** from the script record (`[ctx+0x88]+6`), scales
-it by `[ctx+0x9C]`, and `0x10311C2C` (`_ftoll`) turns it into an **integer duration**; the rotation task's
-target orientation arrives as **three values converted with π/180 (degrees)** while its *start*
-orientation is captured live via virtual slot `[obj->vfx+0x1C0]`. Allocation sizes in both handlers
-(`push 0x80`, `push 0xA0`) equal the classes' descriptor sizes, and the ctor stores exactly the two
-vtables we located (`0x32BAC4` main, `0x32BAA8` at +0x34) — byte-level proof of the D-pass mapping.
+**Data-side leftovers** ([drivetask.md](drivetask.md) §10): the dispatch rule is now byte-confirmed
+(`case = type − 2`, bound `cmp edx,0xC1` ⇒ **194** jump-table entries; our earlier "196" was a scan that
+ran past the end into default-handler pointers). Shipped DATs corroborate the two record contracts —
+504 × `0x89` LockLookAt records whose bytes after `record+8` are all zero (duration-only), and 5 × `0xA9`
+ActorRotation records with yaw ∈ {+90,−90,−135,+45} — while the `0xAA` variant never appears here.
+Two authored-float carriers are still unread as records: stage **`0x28` (case 38)**, int + float
+{30,24,20,10,60,36,15}, in 5,259 files, and **`0x62` (case 96)**, always `(u16,u16)+45.0f`. Read those two
+handlers consumer-side; do not infer meaning from a census again.
 
-**The authored data has now been looked at, and it reorders the plan.** Full-install dump of kuluu's
-scheduler reader ([drivetask.md](drivetask.md) §9): the predicted record markers fail (above), but
-**round-degree floats do live in these streams**, under stage types we had not mapped — `0xA9` (5 records,
-`(pitch=0, yaw=±{90,135,45}, roll=0)` sitting exactly at the offsets the ActorRotation handler pushes:
-record +8/+C/+0x10), `0x62` (214 records, always `(u16,u16)+45.0f`, 107 model DATs) and `unk28`/type 0x28
-(6,234 records across 5,259 files: int + float ∈ {30,24,20,10,60,36,15}). Census is reproducible with
-[`tools/dat_stage_scan.py`](../tools/dat_stage_scan.py). Two blind spots cap the claim: payloads print only
-their first four dwords (5.8% of stage lines have unseen tails) and only chunk type `0x07` is parsed (the
-kuluu reader crashes on `--all-types`, a one-line bug in vendor code, left untouched by the no-kuluu-edits rule).
-Next moves, ranked: **(1)** re-derive case↔stage-byte identity from jump table `.rdata 0x5DC1C` (settles whether
-ActorRotation is `A8` or `A9`, i.e. a possible ±1 in our attribution); **(2)** full-payload re-dump of the rare
-carriers through a wrapper, then read ~ten real records each; **(3)** only then `sqmdModelLookAt` (one caller,
-`0x26E6D3`) for the head's bone index — because §8 already proved LockLookAt carries **no** angle operand at all,
-so its limit is code/per-model, never an authored degree number.
+**Then kuluu (separate task, kuluu repo, user's git rules):**
+- S1 strafe/legs facing (parked force-toward-target fix) and S2 idle<->walk pop (clip continues
+  from shared keyframes) are kuluu's own heading/clip-restart logic and do not wait on any of the
+  above.
+- Head look-at port: yaw only, clamp +-30 deg, one bone, target fed per frame. Replace the
+  cone/slew constant model with this; slew, if any, is upstream.
+- Camera: replace the "pitch" port with the zoom model (242..900, ease 350); halve the Q/E rate.
 
-**So S3's remaining gap is narrow and honest:** (i) re-derive the ctor arg-slot → field mapping
-(I tried and got contradictory readings; recorded as unresolved in drivetask.md §5b — fix by simulating
-the handler stack or by pulling member names from PS2 DWARF instead of guessing offsets), then (ii) go
-to the authored data side: find the script records that carry opcodes **135/168** and read their
-operands. Secondary leads, still open:
+No kuluu code has been changed (research-only rule). Citation form for kuluu edits:
+`FFXiMain.dll retail-2026-09 RVA 0x...`.
 
-1. the head's **6-bit joint index** and its constant table (saturation = limit, velocity = slew);
-2. the **per-joint param struct** `{index, scale@+4, scale2@+8}` (the head's `scale`).
+## 10. W pass: the walker head look-at (TDS 0x6A995428)
 
-**Open conflict worth settling early.** DancingMad reports `sqmoKeyChannel`'s interpolation enum
-(`1`=Linear, `2`=Smooth) as *never exercised* in their retail build, while our J pass found two
-quadratic "smooth" curve evaluators (`0x547A0`, `0x546F0`) with 46 and 26 call sites. Probable
-resolution: motion-channel interpolation ≠ the joint-drive curves J pass saw (matches the J/D layer
-split), but **our build needs a caller census to say so**. Until then nobody quotes either claim.
+Cut to answer: where is the real head-turn limit the user sees in retail and kuluu, and why did
+the DriveTask dig not find it. All [V] unless marked.
 
-A **separate look-at/aim controller** is not ruled out, but its old lead was bogus: the
-"double-fpatan sites" **0x5EA03 / 0x5EF03** are `xor eax, eax` linear-sweep artifacts (J11).
-The site worth tracing now is **0x5EA7F..0x5EA93** — `fpatan` of two locals subtracted from an
-angle stored at `[obj+0x94]`. Tooling note: always sweep with `skipdata=True`; see §8a of
-[joint.md](joint.md) for the x87 ground truth (capstone was never broken).
+**W1. Not a DriveTask.** `CMoLockLookAtDriveTask` has one spawner: scheduler case 135 (stage
+0x89), handler 0x5B14C -> init 0x5F450. The only other install of its vtable (0x32BA34) is at
+0x5F660, slot 6 of that same vtable, the destructor. Playback only.
 
-**The steering question (user, decides the dig):** from retail observation, does the head's
-target-tracking look like it is **part of the animation** (the head joint's own curve
-reacts to the target) or a **separate aim/look-at layered on top**? The user's new note —
-*"new information suggests this is done in the skeleton pieces"* — points to the **J-pass
-integrator** (the head joint's curve reacting to the target), so the first concrete step is
-**finding the head joint + its curve table** and reading the real limit/slew/tug. Either
-way the next step is the same: locate the head joint, then pull its numbers.
+**W2. The mechanism is dancer's per-model look-at.** `mdlRegister()` (error string 0x3B19D0)
+places every model in a global array: base `[0x1099AED0]`, count `[0x1099AECC]`, capacity
+`[0x1099AEC8]`, stride 0xAC. Slot layout as initialized by 0x26E530:
 
-**User's head observations to match [O]:**
-- The player "looks" at the target until it moves out of the head-turn limit, then **snaps
-  back to straight**; the head turns when the target changes.
-- The limit may be a max up/down/left/right, **or** the head "ignores after certain values
-  and returns 0."
-- The body moves with the head **very slightly, L/R** (the tug).
+| offset | init value | meaning |
+|---|---|---|
+| +0x00 | 1 | flags; bit 0x200 = look-at enabled (tested at 0x26E6BC) |
+| +0x04 | name | model name string (copied at mdlRegister 0x26EBD2) |
+| +0x84 | 1.0f | weight/scale (unread consumer) |
+| +0x88 | -1 | |
+| +0x90 | -1 | look-at bone index (range-checked vs model numBones in LookAt) |
+| +0x94 | **0x3F060A92 = pi/6** | **look-at yaw limit, radians** |
+| +0x98 | vec init (0x274640) | look-at target position (vec3) |
+| +0xA8 | model ptr | set at mdlRegister 0x26EBE2 |
 
-No kuluu code has been changed (research-only rule). When the numbers are extracted and
-approved, the kuluu edit citation form is `FFXiMain.dll retail-2026-09 RVA 0x...`.
+**W3. Apply.** dancer's per-frame update (0x26E4C2, loop body from 0x26E6B1) walks every slot
+with bit 0x200 and calls `sqmdModelLookAt(model=[slot+0xA8], 0, bone=[slot+0x90],
+target=&slot[0x98], limit=[slot+0x94])` at 0x26E6D3 (the function's only caller). sqmdModelLookAt
+is at 0x278E90..0x2790B1 (error string 0x3B3C30 names it); it iterates the model's sub-models
+(`[model+0x44]`) and applies on the one whose index equals arg2.
+
+**W4. The clamp, 0x278FF1..0x279036.**
+```
+fld [esp+0x18]; fld [esp+0x20]; fpatan    ; yaw = atan2(delta)   (delta = target - bone pos, two
+fst  [esp+0x10]                           ;   passes at 0x278F58 and 0x278FB6 via 0x27B080)
+fcomp [esp+0x90]                          ; yaw vs limit (arg5)
+... yaw = +limit if yaw > limit
+fld [esp+0x90]; fchs; fld [esp+0x10]; fcomp st(1)
+... yaw = -limit if yaw < -limit
+```
+`[esp+0x90]` is arg5 = `[slot+0x94]`. **Default pi/6 = 30.0000 deg** (0x3F060A92 is bit-exact
+float32(pi/6)). Every store to `+0x94` in `.text` was enumerated; none targets the model slot
+other than the init. The limit is a hard default.
+
+**W5. Yaw only.** The function contains exactly one `fpatan`. The rotation is built by
+0x27ABA0(&q, yaw): `fld angle; fsin -> q.x; fcos -> q.w`, one angle, one axis. No pitch is
+computed anywhere in this path. Up/down head motion, if the user ever sees it, is not this
+mechanism.
+
+**W6. One bone.** After the clamp: `node = [bone+0x64]`; 0x27ABA0 builds the rotation;
+0x27B170(out, &rot, node+0x68) multiplies it into the bone's node matrix; 0x27A700 writes it
+back. No parent-chain distribution, no weights, inside sqmdModelLookAt.
+
+**Open (section 9):** release/snap-back; which bones/models the game registers (shoulder);
+what consumes `+0x84`; slew (if the target position is eased before being written to +0x98).
+
+**Kuluu-facing conclusion:** the head follows the target in yaw only, clamped to +-30 deg, applied
+to a single bone, with the target refreshed per frame. kuluu's `HEAD_MAX_TURN_RAD` maps to
+0.5236; `HEAD_VIEW_CONE_COS` and `HEAD_SLEW_TAU_FRAMES` have no counterpart in this layer (the
+release and any easing live upstream or in a second registration; see open items). Citation:
+`FFXiMain.dll retail-2026-09 RVA 0x278FF1 (clamp), 0x26E561 (limit)`.
