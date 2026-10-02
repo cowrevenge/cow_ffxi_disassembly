@@ -364,10 +364,19 @@ creates them**: interpreter opcode cases **135** and **168** inside `CMoSchedula
 No float immediates appear in either handler, so the limit / duration / degree magnitudes are
 **operands in authored effect-script data**.
 
-**Top next step is therefore a data-side question, not more code reading:** (a) what do the operand
-fetchers `0x10062770` / `0x1005E590` read (width/type per opcode), and (b) which authored script
-records emit opcodes 135/168 — those records carry the actual numbers for S3. Secondary leads,
-still open:
+**Operand encoding is now known [V] ([drivetask.md](drivetask.md) §5b):** the interpreter's fetcher
+`0x1005E590` reads a **signed 16-bit authored integer** from the script record (`[ctx+0x88]+6`), scales
+it by `[ctx+0x9C]`, and `0x10311C2C` (`_ftoll`) turns it into an **integer duration**; the rotation task's
+target orientation arrives as **three values converted with π/180 (degrees)** while its *start*
+orientation is captured live via virtual slot `[obj->vfx+0x1C0]`. Allocation sizes in both handlers
+(`push 0x80`, `push 0xA0`) equal the classes' descriptor sizes, and the ctor stores exactly the two
+vtables we located (`0x32BAC4` main, `0x32BAA8` at +0x34) — byte-level proof of the D-pass mapping.
+
+**So S3's remaining gap is narrow and honest:** (i) re-derive the ctor arg-slot → field mapping
+(I tried and got contradictory readings; recorded as unresolved in drivetask.md §5b — fix by simulating
+the handler stack or by pulling member names from PS2 DWARF instead of guessing offsets), then (ii) go
+to the authored data side: find the script records that carry opcodes **135/168** and read their
+operands. Secondary leads, still open:
 
 1. the head's **6-bit joint index** and its constant table (saturation = limit, velocity = slew);
 2. the **per-joint param struct** `{index, scale@+4, scale2@+8}` (the head's `scale`).

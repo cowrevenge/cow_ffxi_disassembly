@@ -163,6 +163,50 @@ magnitudes are **operands read from authored effect-script data**. That is consi
 The hunt therefore moves **to the data side**: what `0x10062770` / `0x1005E590` fetch (width/type of
 each operand), and which authored script records emit opcodes **135/168**.
 
+## 5b. Case 168 → `CMoActorRotationDriveTask` ctor: the authored operands **[V]**
+
+Handler (`0x5B3DF..0x5B446`) decoded:
+
+```asm
+0x5B3E1  call 0x100627D0      ; resolve an object for this opcode -> eax; 0 => bail
+0x5B3EE  push 0xa0            ; allocation size == descriptor size 0xA0 (second independent confirmation)
+0x5B3F3  call 0x1005E040      ; alloc + register with the task manager (calls 0x100748F0; sets flag 0x1047D13C)
+0x5B40B  call 0x1005E590      ; fetch authored operand: int16 [rec+6] -> FPU, × scale [ctx+0x9C]
+0x5B412  call 0x10311C2C      ; _ftoll: float -> integer (so the duration is an INTEGER, likely frames)
+0x5B417..0x5B429               ; read the SCRIPT RECORD [ctx+0x88]: fields +0x08, +0x0C, +0x10,
+                               ;   and a byte field +0x14 (zero-extended) -> pushed as ctor args
+0x5B42C  call 0x10062770      ; resolve another object -> eax (pushed)
+0x5B435  call 0x1005FA20      ; CMoActorRotationDriveTask ctor, 7 args, ret 0x1C
+```
+
+`0x1005E590`, the operand fetcher, in full (**the authored value is a signed 16-bit integer scaled by
+a context factor**):
+
+```c
+// RVA 0x1005E590 — fetch a scaled authored operand
+float v = (float)(int16_t)*((uint16_t*)ctx->record /*[ctx+0x88]*/ + 3);   // word at record+6
+return v * *(float*)(ctx + 0x9c);
+```
+
+Ctor facts (`0x5FA20..0x5FAD9`, **verified**):
+- stores **both** vtables we located — `[task] = 0x32BAC4` and `[task+0x34] = 0x32BAA8`. That is byte-
+  level proof of the D-pass vtable identification (main object + embedded sub-object at +0x34).
+- writes `1.0f` to `[task+0x9c]`.
+- performs **three** conversions `[arg] × 0.0174527783` (**π/180**) storing to `[task+0x90]`,
+  `[task+0x94]`, `[task+0x98]` → **the target orientation is supplied in degrees**.
+- reads a triple through virtual slot `[obj->vfx + 0x1C0]` (called three times, fields +0/+4/+8) and
+  stores to `[task+0x80..0x88]` → the *starting* orientation is **captured live at creation**.
+- `fild dword …` of an integer argument, stored to `[task+0x74]` and `[task+0x78]` (matches the
+  update's countdown use: `+0x74` ticked against clock dt, per §4).
+
+**Unresolved — stated plainly, do not quote:** I attempted the mechanical arg-slot → field mapping
+(push order at `0x5B41D..0x5B432`, `ret 0x1C`) and got **inconsistent results**: a slot that must hold
+a float (it is loaded with `fld` then × π/180) lands where the handler pushed a zero-extended byte, so
+either my push-order reading or the callee-frame shift assumption is wrong. The arg↔field correspondence
+(+0x7c's exact role too — used as both a null-test target and in an equality chain by the update loop)
+must be re-derived before any kuluu code depends on it. Cheapest fixes: machine-simulate the handler's
+stack, or get member names from PS2 DWARF / DancingMad's reconstruction instead of offsets.
+
 ## 6. What this pass still does NOT know [O]
 
 1. **Which bone index is "the head"**, and who supplies that index to `sqmdModelLookAt`. The
@@ -176,9 +220,15 @@ each operand), and which authored script records emit opcodes **135/168**.
    don't know which bone index it uses for a head.
 4. Whether the +0xE4…+0xF0 pair-writes are joint angles or a different record (§4 caveat).
 5. `CMoLockLookAtDriveTask::update` (region 0x5F540…) computes progress-like values by comparing
-   `[esi+0x78] − obj->field` against 0.0 and 1.0 via virtual `[obj->vfx+0x1BC]`; the semantic of
-   that field (duration? distance?) is unresolved.
-6. Mixer behaviour (`sqmoMixerMotion`) — needed for the idle↔walk seam — untouched.
+   `[esi+0x78] − obj->field` against 0.0 and 1.0 via virtual `[obj->vfx+0x1BC]`. The ActorRotation ctor
+   (§5b) writes the same pair of fields from one integer argument (`[+0x74]`, `[+0x78]`) and its update
+   ticks `+0x74` against dt ⇒ **duration** for that class; whether LockLookAt shares that meaning is
+   still inferred, not proven.
+6. The operand-fetcher pair `0x100627D0` vs `0x10062770` (two object-resolution specs; both take a
+   spec table in `.rdata`, e.g. `0x1032F910`, and match via the virtual predicate at `0x1002C8F0`) —
+   what each resolves for opcode 168 vs 135 is not pinned. **Correction to an earlier note: `0x1032F910`
+   is NOT a string** — it holds pointers/counts, so resolution is by type/spec, not by name.
+7. Mixer behaviour (`sqmoMixerMotion`) — needed for the idle↔walk seam — untouched.
 
 ## 7. Reproduce [V]
 
