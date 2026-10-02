@@ -10,6 +10,16 @@ Statuses: **done** = matches a verified rule · **partial** = right idea, wrong/
 > Ground rules inherited from [summary.md](summary.md) §0: retail is king; byte-verify or don't write it; a delta
 > that doesn't unblock S1–S4 isn't progress.
 
+**Say which install view a DAT read used.** A Pivot-installed client resolves whole files through its overlay
+packs, so "the install says X" is ambiguous: measured on the Phoenix-style install this workspace uses
+(`overlays = XICombinedMaps-2048, NextHD, XiView-Standard, EraDATs`), the era pack replaces the spell list —
+base `ROM/118/114.DAT` gives Fire 2 units (500 ms), the overlaid path gives 9 units (2250 ms) — and it shadows
+the zone dialog tables too. Model/skeleton DATs are *not* replaced: `7072` (`ROM/27/82.DAT`, skeleton `hum_`)
+resolves to the base file both ways, authored limits identical `(0.24,0.16,0.5) (0.16,0.06,0.5) (0,0,0.5)`.
+kuluu's profile pins now clear overlays so they describe one client profile (`fix(dat): read the installed-DAT
+pins from the base install, not Pivot overlays`, branch `jw-stack-815`); a census over files on disk sees only
+the base view and says nothing about what an overlaid client renders.
+
 ## A. Head / neck look-at — symptom **S3** ([lookat.md](lookat.md))
 
 | # | Verified retail rule (RVA) | kuluu today | Gap | Status |
@@ -20,7 +30,7 @@ Statuses: **done** = matches a verified rule · **partial** = right idea, wrong/
 | A4 | The limit is a **per-model authored ellipse** `{xlim, ylim, scale}` in skeleton chunk kind **`0x29`** at `refs_end + 0x48`, stride 12 (accessor `0x35270`); humanoid head `(0.24, 0.16)`, neck/shoulder `(0.16, 0.06)`; **zeros ⇒ that bone does not bend** ([lookat.md §E/E.3](lookat.md)) | one hardcoded clamp `HEAD_MAX_TURN_RAD = 1.20 rad ≈ 68.8°` (`ffxi_actor_render.rs:3244`) applied identically to every model/race | no data load at all; per-model variety (539/310/22 vs 2,488 zero-authoring) invisible | missing |
 | A5 | Bend applies **record[0] on the head bone and record[1] on neck/shoulder** — second bone dropped when status predicate `0x84390` returns `{0x30} ∪ {0x3F..0x53}` (`0x2AE0D..0x2AEBB`) | one joint (`find_head_neck`, derived by heuristic from hand references 126/127 + parent chains, `ffxi-actor/src/skeleton_instance.rs:357`) rotated **rigidly over its subtree** (`apply_head_look` `:428`) | no shoulder share as a second, smaller ellipse; head index computed rather than authored; rigid subtree ≠ two independently limited bones | missing |
 | A6 | Look-at gated by target status ∈ {0,1,2,6,7,8} and own status ∈ {0,0x2F,0x30}/mount preds; scheduler stage `0x89` bit 2 suppresses it (watchdog ends on ≥1.0 moved or authored duration) ([lookat.md §B](lookat.md)) | no gate: if a target id resolves, the head aims (`ffxi_actor_render.rs:4717-4737`) | sitting/resting/locked-animation states keep aiming; nothing consumes the `0x89` stage here | missing |
-| A7 | *Data correctness*: those limit records sit **inside** what kuluu currently parses as bounding boxes — replaying `ffxi-dat/src/skel.rs:129-141` on `hum_` (`ROM\125\74.DAT`) yields **5** "bounding boxes", #4 = `[0.24, 0.16, 0.5, 0.16, 0.06, 0.5]`, #5 = limits + `CDCDCDCD` sentinel junk | same loop (`skel.rs:129-141`), consumed only by a diagnostic (`examples/actor-scan.rs:52`) | the section must be split: authored bboxes → real bbox list; `{xlim,ylim,scale}` records → look-at limits. Today kuluu throws them away *as garbage boxes* | bug |
+| A7 | *Data correctness*: those limit records sit **inside** what kuluu parsed as bounding boxes — replaying the bbox loop on `hum_` yielded **5** "bounding boxes", #4 = `[0.24, 0.16, 0.5, 0.16, 0.06, 0.5]`, #5 = limits + `CDCDCDCD` sentinel junk | loop capped at the record offset; records exposed as `Skeleton::look_at_limits`; pinned against `ROM/27/82.DAT` (base view) by `real_dat_hume_skeleton_authors_look_at_limits_after_three_boxes` | parser fixed; consumers still pending — the records are read only by a diagnostic (`examples/actor-scan.rs`) until rows 3–4 land | done — on `jw-stack-815` as `fix(dat): split the skeleton chunk tail so authored look-at limits are not boxes` |
 
 ## B. Body / legs facing while strafing — symptom **S1** ([target_track.md](target_track.md), [movement.md](movement.md))
 
@@ -56,7 +66,7 @@ Nothing below needs more DLL work first except B4/C2/C4 (named reads). Each row 
 
 | order | change | verify by |
 |---|---|---|
-| 1 | **Fix `skel.rs` section split (A7)** — stop the bbox loop where the authored boxes end; expose `{xlim,ylim,scale}` records (`refs_end+0x48`, stride 12). No behaviour change outside tests/pin-values. | unit test on `hum_`: limits == `(0.24,0.16,0.5)`,`(0.16,0.06,0.5)`,`(0,0,0.5)`; the bbox list no longer contains a box made of limit floats nor any `CDCDCDCD` group (today it returns 5, two of them junk); `examples/actor-scan.rs` real boxes unchanged |
+| 1 | **DONE** (`jw-stack-815`) — **Fix `skel.rs` section split (A7)** — stop the bbox loop where the authored boxes end; expose `{xlim,ylim,scale}` records (`refs_end+0x48`, stride 12). No behaviour change outside tests/pin-values. | unit test on `hum_`: limits == `(0.24,0.16,0.5)`,`(0.16,0.06,0.5)`,`(0,0,0.5)`; the bbox list no longer contains a box made of limit floats nor any `CDCDCDCD` group (today it returns 5, two of them junk); `examples/actor-scan.rs` real boxes unchanged |
 | 2 | **Replace the head-look model (A1+A2+A3)** — attach-point look point, positional release (0.3 / −0.5 forward), weight ±0.04/frame × 1/32 chase; delete `HEAD_VIEW_CONE_COS`/`HEAD_MAX_TURN_RAD`/`HEAD_SLEW_TAU_FRAMES`. | walk past a mob: head tracks, snaps back straight when it passes behind the shoulder line (~25-frame settle, not a jump); no change at 90° to target; standing vs walking identical |
 | 3 | **Ellipse from data + second bone (A4+A5)** — apply each record as an ellipse in that bone's tangent plane on head *and* neck/shoulder, mode→1 bone for the status set. | hume (0.24/0.16) vs orc (0.1/0.1): visibly different limits; shoulder follows slightly and stops earlier than the head; zero-authoring models (most mobs) show no head bend at all |
 | 4 | **Gates + `0x89` suppression (A6)** — status sets, LockLookAt stage bit/watchdog. | sit / event / mid-action: head freezes then resumes after you move ≥1 yalm or the duration ends; Goblin/Tarutaru question resolved in-game ([O?] flag in [lookat.md §E.3](lookat.md)) |
