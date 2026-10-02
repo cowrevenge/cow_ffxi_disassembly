@@ -196,6 +196,12 @@ not just a number.
 - **XIClient source as ground truth — unreliable [O/I].** Used only as a navigation map for
   *where to look*; its layout (e.g. the view matrix) conflicts with the retail C2 layout.
   Every finding is verified in the DLL, not taken from XIClient.
+- **"Interpreter case index = scheduler stage type byte" (`0x87` = LockLookAt, `0xA8` = ActorRotation)
+  — falsified against data [V] (DAT pass).** Across all 178,142 parsed scheduler streams `0x87` never
+  occurs at all, and the ten `0xA8` occurrences are two-int records too short to carry the operand set
+  ActorRotation's ctor provably consumes. The authored magnitudes *do* exist in these streams — under other
+  stage bytes (see [drivetask.md](drivetask.md) §9). Treat every case↔byte mapping as unproven until the
+  jump-table attribution is re-derived.
 
 ## 4. How we think the ffxi **walker** works (M pass)
 
@@ -371,6 +377,21 @@ target orientation arrives as **three values converted with π/180 (degrees)** w
 orientation is captured live via virtual slot `[obj->vfx+0x1C0]`. Allocation sizes in both handlers
 (`push 0x80`, `push 0xA0`) equal the classes' descriptor sizes, and the ctor stores exactly the two
 vtables we located (`0x32BAC4` main, `0x32BAA8` at +0x34) — byte-level proof of the D-pass mapping.
+
+**The authored data has now been looked at, and it reorders the plan.** Full-install dump of kuluu's
+scheduler reader ([drivetask.md](drivetask.md) §9): the predicted record markers fail (above), but
+**round-degree floats do live in these streams**, under stage types we had not mapped — `0xA9` (5 records,
+`(pitch=0, yaw=±{90,135,45}, roll=0)` sitting exactly at the offsets the ActorRotation handler pushes:
+record +8/+C/+0x10), `0x62` (214 records, always `(u16,u16)+45.0f`, 107 model DATs) and `unk28`/type 0x28
+(6,234 records across 5,259 files: int + float ∈ {30,24,20,10,60,36,15}). Census is reproducible with
+[`tools/dat_stage_scan.py`](../tools/dat_stage_scan.py). Two blind spots cap the claim: payloads print only
+their first four dwords (5.8% of stage lines have unseen tails) and only chunk type `0x07` is parsed (the
+kuluu reader crashes on `--all-types`, a one-line bug in vendor code, left untouched by the no-kuluu-edits rule).
+Next moves, ranked: **(1)** re-derive case↔stage-byte identity from jump table `.rdata 0x5DC1C` (settles whether
+ActorRotation is `A8` or `A9`, i.e. a possible ±1 in our attribution); **(2)** full-payload re-dump of the rare
+carriers through a wrapper, then read ~ten real records each; **(3)** only then `sqmdModelLookAt` (one caller,
+`0x26E6D3`) for the head's bone index — because §8 already proved LockLookAt carries **no** angle operand at all,
+so its limit is code/per-model, never an authored degree number.
 
 **So S3's remaining gap is narrow and honest:** (i) re-derive the ctor arg-slot → field mapping
 (I tried and got contradictory readings; recorded as unresolved in drivetask.md §5b — fix by simulating

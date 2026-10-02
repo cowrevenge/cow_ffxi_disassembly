@@ -316,3 +316,112 @@ while True:
     if (m+5+struct.unpack_from('<i',d,m+1)[0])==tgt: print('caller RVA 0x%X'%m)
     m+=1   # -> exactly 4; two external feeders gate through call 0x10057c20
 ```
+
+## 9. DAT pass — the authored operands in real scheduler streams (2026-10-03) **[V]** for counts, **[I]** for role
+
+This section **supersedes the "record markers" paragraph in §8** (`stage byte 0x87 = op-135`,
+`0xA8 = op-168`). Those bytes were a user-supplied guess to be verified against data; they are now
+verified **against**, so do not carry them forward.
+
+Corpus: kuluu's own reader `ffxi_dat::dat_routines` (vendor script `ffxi_disassembly/dat_routines.py`)
+dumped the whole install (`C:\PhoenixXI\SquareEnix\FINAL FANTASY XI`): 52,989 `.DAT`, **178,142**
+scheduler streams parsed, **450,253** stage lines (+178,141 `end`). Dump lives outside both repos at
+`C:\tmp\drivetask_dat\stages.md`; [`tools/dat_stage_scan.py`](../tools/dat_stage_scan.py) re-runs every
+census below against that dump.
+
+### 9.1 The predicted markers fail **[V]**
+
+| stage type | occurrences | payload length |
+|---|---|---|
+| `0x87` (predicted op-135 LockLookAt) | **0** — the byte never appears in a scheduler stream | — |
+| `0xA8` (predicted op-168 ActorRotation) | 10 (`ROM\151\126`, `ROM\309\117`, `ROM\309\32`, `ROM5\7\29`) | always `len=3` ⇒ payload ends at record+0xC, i.e. **two ints** |
+
+An ActorRotation record must supply the three degree operands + duration that §5b proves the ctor
+consumes; a 2-int payload cannot. So **the jump-table case index is NOT the stage type byte** (at least
+not directly in this range) — and `0x87`'s total absence means we never had a mapping, only an
+assumption. Census of the whole 0xA0..0xB7 band for reference **[V]**:
+
+```
+present: A2 x32(2dw)  A3 x773(4)  A4 x232(3)  A5 x234(3)  A7 x13(3)  A8 x10(3)  A9 x5(6)
+         AB x4(3)     AC x10(3)   AD x5(3)    AE x2(17)   AF x3(3)   B0 x48(6)
+         B2 x9(2)     B3 x200(8)  B4 x8(3)    B5 x107(2)  B6 x8(3)   B7 x3(3)
+absent : A0 A1 A6 AA B1
+```
+
+### 9.2 Authored **round angles do live in these streams** — under other stage bytes **[V]**
+
+Scanning every printed payload dword for *exact* IEEE-754 matches of round degree/scalar values
+(aligned to the dword grid, no cross-boundary matching):
+
+| value | hits | which stage type(s) |
+|---|---|---|
+| `30.0f` | **1,514** | `unk28` (type 0x28) |
+| `12.0f` | 499 | `0x5E`, `0xBF`, `0x6E` |
+| `45.0f` | 214 | **`0x62`** (exactly 45 in all of them) + `0xA9` |
+| `24.0f` / `20.0f` | 552 / 552 | `unk28` (and 3 stray `20`s in `0x5E`) |
+| `10.0f` / `60.0f` / `36.0f` / `15.0f` | 189 / 54 / 38 / 12 | `unk28` (a wider value set also turns up single `4/5/2` matches) |
+| `+90.0f`, `−90.0f`, `−135.0f` ×2, `+45.0f` | 5 total | **`0xA9`** — all in one file, `ROM3\0\43.DAT` |
+| `1.0f` (not an angle) | 19,212 | `0x25`, `unk21`, … (scale/volume params) |
+
+So the earlier framing "no authored magnitudes in chunk-0x07" is **wrong**; they are there, just not at
+the bytes we guessed.
+
+### 9.3 The three carriers, read by eye **[V]** for bytes, **[I]** for role
+
+* **`0xA9` — best ActorRotation candidate.** `len=6` dw, five records total (file `ROM3\0\43.DAT`,
+  routines `seq*` interleaved with `ref09 st01/del2` and the 10-dword `0x27` stages — an
+  effect/ability sequence library, not a model DAT):
+
+  ```text
+  a9 06 | 3c 00 c0 03 | 00 00 00 00 | 00 00 b4 42 | 00 00 00 00 [| unprinted dword]
+                        rec+8 = 0.0f   rec+C = angle   rec+0x10 = 0.0f
+  angles seen: +90, -90, -135 (x2), +45      (dword grid below record base)
+  ```
+
+  Why this shape matters **[I]:** §5b showed the case we attributed to 168 pushes record fields
+  `+8 / +C / +0x10` and the ctor converts **three** values × π/180 into a target euler. `0xA9` supplies
+  precisely `(pitch=0, yaw=±degrees, roll=0)` at those offsets — an authored **yaw-only turn**, exactly what
+  §4/§5b describe (`start` orientation captured live from the actor). A byte-level match on layout, not
+  yet on identity.
+* **`0x62`** — 214 occurrences over 107 model DATs (e.g. `ROM\100\56.DAT`, routine `jh02`), always
+  `0a 00 23 00 | 00 00 34 42` = `(u16 10, u16 35)` + **`45.0f`**, constant everywhere. Uniform operand ⇒
+  authored per-animation-stage magnitude **[I]**; but its payload ends at `rec+C`, so it cannot be the
+  three-float ActorRotation record either.
+* **`unk28` (type 0x28)** — by far the most common float carrier: **6,234** records in **5,259** files,
+  always `len=3`: `(small int / u16-pair)` + one float whose values cluster at 30/24/20/10/60/36/15 plus
+  many zeros. Pervasive across player *and* mob DATs ⇒ a general per-routine parameter; **not proven to be
+  an angle** (30 could be frames or ms). The §docstring note "0x28 colour-ish (0x80808080)" is out of date —
+  these payloads are int+float **[V]**.
+
+### 9.4 Blind spots of this pass — state them, don't paper over them
+
+1. **Payload truncation.** `describe_stage` prints only `raw[4:20]`, i.e. the first four payload dwords.
+   **26,131 of 450,253** stage lines (5.8%) have unseen tails — including *all* `0xA9` records' last dword
+   and every `0x25/0x0B/unk21/0x2C/0x3F/0x53/0x60/0x04` long record. A float **triple** could hide there.
+   Within the printed window, no stage type shows three consecutive floats **[V]**.
+2. **Chunk coverage.** Only chunk type `0x07` is parsed as a stream (by design — motion/mesh chunks parse
+   by accident and polluted an earlier census). Unexamined: 202,927 × `0x05` generator, 196,749 × `0x19`,
+   103,951 × `0x2B` motion clips, 85,668 × `0x20` skeleton… Broadening with `--all-types` **crashes** the
+   kuluu tool (`describe_stage` reads `st['timing']` unconditionally for type `0x02`, but that key exists
+   only when stage length ≥ 3 → `KeyError: 'timing'`). Not fixed here: no kuluu edits this pass. It is a real
+   one-line bug in vendor code and worth its own change request.
+3. **Identity still unproven.** case-index ↔ stage-type-byte remains inferred (nearest preceding jump-table
+   target), so the `A8`/`A9` adjacency above could be a ±1 attribution error. One bounded lookup settles it:
+   read jump table `.rdata 0x5DC1C` entry for the handler containing `0x5B3DF` and confirm its index, then
+   find which stage type the record-fetcher (`0x10057C20`) keys that case on.
+4. Rare-type counts come from a *linear dump*, not from live dispatch: if some stream never reaches these
+   bytes because it terminates earlier, `A9` may be over- or under-represented relative to runtime.
+
+### 9.5 Where that leaves S3 and plan B **[I]**
+
+* **Plan B (data-driven drive-tasks) survives** — authored magnitudes exist in the same streams the
+  interpreter feeds, and `0xA9`'s layout matches ActorRotation's operand reads.
+* **The head numbers are still not there, for a structural reason:** §8 proved op-135 LockLookAt takes no
+  angle operand at all (geometry aim). Nothing found in the data contradicts that. A head *limit* is
+  therefore expected in code near the atan2 family (J pass §8b `0x5EA8B`) or as a per-model
+  `sqmdModelLookAt` parameter — not an authored degree number.
+* Ranked next moves: (1) settle case↔byte identity; (2) full-payload re-dump for the rare carriers
+  (`A9/62/28`, plus long-record tails) via a wrapper so kuluu stays untouched, then read ~ten of each by eye;
+  (3) only after that, chase `sqmdModelLookAt`'s one caller at `0x26E6D3` for the head's bone index and
+  limit/slew. S1/S2 stay first in line for kuluu work: they are our own heading/clip-restart bugs and none
+  of this blocks them.
