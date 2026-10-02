@@ -124,15 +124,56 @@ Consequences for kuluu:
   `0x32A3B0/B4/B8` (exact ±π, 2π) pair. Two different wrap conventions exist in the binary; do not
   assume one global wrap constant when doing parity work. **[V]**
 
+## 5a. Who builds these tasks: the effect-script interpreter **[V]**
+
+Both construction sites (`0x5F476/0x5F47F`, `0x5FA49/0x5FA4F`) live inside **one function,
+`0x57FB0..0x5DFF0`** (~24 KB), whose jump table is `.rdata 0x5DC1C` — **196 entries** in our build.
+
+**Cross-confirmation of DancingMad + a refinement of the tier rule:** they name exactly this thing —
+`CMoSchedularTask_Interpret 0x10057FB0 (23.6 KB, jump table 0x1005DC1C)` — and our bytes agree on
+**both addresses**. So their build is close enough that *some* RVAs do coincide with ours. The
+`[web]` rule stays, but it becomes **per-region: check each address; never blanket-assume a match or
+a mismatch** (`XiZone`'s singleton differs).
+
+Each task type has its own interpreter opcode case (index = position in the 0x5DC1C table; handler =
+nearest preceding table target for the site):
+
+| opcode case | handler | builds | allocation |
+|---|---|---|---|
+| **135** | 0x5B14C | `CMoLockLookAtDriveTask` | `push 0x80` — equals its descriptor size **0x80** (independent cross-check that the descriptor's u32 field *is* object size) |
+| **168** | 0x5B3DF | `CMoActorRotationDriveTask` | allocation cross-check not done yet |
+
+Case 135 decoded:
+
+```asm
+0x5B14C  mov  ecx, esi
+0x5B14E  call 0x10062770      ; operand/guard fetch from the script context -> eax; 0 => bail
+0x5B15B  push 0x80            ; class size
+0x5B160  call 0x1005E040      ; operator new
+0x5B174  call 0x1005E590      ; script-context accessor #1
+0x5B179  call 0x10311C2C      ; global / other-module getter -> eax   (ctor arg)
+0x5B181  call 0x10062770      ; operand fetch from the script stream -> eax (ctor arg)
+0x5B187  push esi             ; scheduler/script context
+0x5B18A  call 0x1005F450      ; CMoLockLookAtDriveTask ctor(ecx = block; args: operand, global, ctx)
+```
+
+**Consequence for S3 (head limit / slew / tug):** no float immediate appears in either handler — the
+magnitudes are **operands read from authored effect-script data**. That is consistent with J pass
+(no clamp constant found) and with this layer's π/180 conversion (**the operand arrives in degrees**).
+The hunt therefore moves **to the data side**: what `0x10062770` / `0x1005E590` fetch (width/type of
+each operand), and which authored script records emit opcodes **135/168**.
+
 ## 6. What this pass still does NOT know [O]
 
 1. **Which bone index is "the head"**, and who supplies that index to `sqmdModelLookAt`. The
    error string proves a boneNdx parameter; the caller set is not yet traced.
-2. **Who constructs** `CMoLockLookAtDriveTask` / `CMoActorRotationDriveTask` (construction sites
-   0x5F476/0x5F47F and 0x5FA49/0x5FA4F store the vtables; their *callers* — i.e. the lock-on logic
-   that decides "now look at it", with what duration/mode/degrees — are unread). **This is where
-   the limit, slew and tug values will actually appear as arguments.** Next dig.
-3. `sqmdModelLookAt`'s body (function start not yet pinned; only its error tail at 0x2790A2 is known).
+2. ~~Who constructs them~~ → **answered (§5a)**: interpreter opcodes **135 / 168** inside
+   `CMoSchedularTask_Interpret` (0x57FB0; jump table `.rdata 0x5DC1C`, 196 entries). Still unknown:
+   the operand schema — what `0x10062770` and `0x1005E590` read, per opcode — and which authored
+   script records carry opcodes 135/168 with what degree/duration values. **This is now the top dig.**
+3. `sqmdModelLookAt`'s semantics. Its bounds are now known via the function-start table —
+   **`0x278E90..0x2790C0`, one caller at `0x26E6D3`** — but the body is not read yet, so we still
+   don't know which bone index it uses for a head.
 4. Whether the +0xE4…+0xF0 pair-writes are joint angles or a different record (§4 caveat).
 5. `CMoLockLookAtDriveTask::update` (region 0x5F540…) computes progress-like values by comparing
    `[esi+0x78] − obj->field` against 0.0 and 1.0 via virtual `[obj->vfx+0x1BC]`; the semantic of
@@ -149,3 +190,7 @@ point `open('FFXiMain.unpacked.dll')` at your own working copy, or run from that
   (**remember: file offset == RVA**; do not add ImageBase when indexing the buffer).
 - `dt_consts2.py` — constant + sink scan over a code range (regex on `\[(0x…)\]`, not token split).
 - `who_makes_tasks.py` — group `.text` references to a `.rdata` table range by target.
+- `opcode_cases.py`, `interp_case.py` — verify an interpreter jump table (address + entry count),
+  map an RVA to its opcode case index, and dump one handler with floats annotated inline.
+- `fn_locate.py` — resolve the enclosing function of any RVA from `tables_functions.csv`. **Use this
+  instead of scanning backwards for `int3` padding**, which mis-detects boundaries.

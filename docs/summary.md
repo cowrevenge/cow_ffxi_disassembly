@@ -151,6 +151,11 @@ not just a number.
   `Vec3_Lerp` translation/scale), gated by a per-bone byte mask (bit 6 = touched by a base layer this
   update; bit 7 = bone accepts blends), same bits deciding interrupt-vs-queue. ⇒ retail *masks and
   blends per bone* rather than restarting the whole pose.
+- **The interpreter address cross-confirms DancingMad, and refines how we use them [V].** Their
+  `CMoSchedularTask_Interpret 0x10057FB0 … jump table 0x1005DC1C` matches our bytes *exactly* (we
+  found that function and its **196-entry** table independently while locating the DriveTask
+  constructors). So `[web]` addresses must be checked **per region**: some coincide, some don't
+  (`XiZone`'s singleton differs). Never assume either way.
 - **Key globals [V]:** entity table (0x480AF0 @ 0x6A995428 / 0x480B30 @ 0x6A7297F5,
   stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
   clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
@@ -353,10 +358,15 @@ head look-at curve.
 
 **The head limit/slew/tug — now with a better lead than "somewhere in the curves".** The D pass
 found the overlay layer that actually rotates actors toward things (`CMoLockLookAtDriveTask` /
-`CMoActorRotationDriveTask`, driven by degree-denominated authored values). **Top next step:
-read the callers of the construction sites** — LockLookAt `0x5F476/0x5F47F`, ActorRotation
-`0x5FA49/0x5FA4F` — because the limit / duration / degree magnitudes should appear there as
-arguments, and those callers are also where "lock-on happened" is decided. Secondary leads,
+`CMoActorRotationDriveTask`, driven by degree-denominated authored values), **and we now know who
+creates them**: interpreter opcode cases **135** and **168** inside `CMoSchedularTask_Interpret`
+(`0x57FB0..0x5DFF0`; jump table `.rdata 0x5DC1C`, 196 entries) — [drivetask.md](drivetask.md) §5a.
+No float immediates appear in either handler, so the limit / duration / degree magnitudes are
+**operands in authored effect-script data**.
+
+**Top next step is therefore a data-side question, not more code reading:** (a) what do the operand
+fetchers `0x10062770` / `0x1005E590` read (width/type per opcode), and (b) which authored script
+records emit opcodes 135/168 — those records carry the actual numbers for S3. Secondary leads,
 still open:
 
 1. the head's **6-bit joint index** and its constant table (saturation = limit, velocity = slew);
