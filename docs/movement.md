@@ -532,29 +532,34 @@ only multiplied by -1.0 (@0x32A3F0) while keys 0x8B/0x8C are held
 6.0/max(dist, 0.01)) therefore always rotates by 0. There is no retail
 left/right arrow yaw rate in this build to port.
 
-**M20 [local].** The frame tick: **0x14CF0** returns the field
-`[0x104568FC]+0x28`. *Re-read 2026-10-05, and this narrows what the getter can be used to claim —*
-the twin getters `0x14CF0` and `0x14D20` are byte-identical in shape:
-
+**M20 [local].** The frame tick: **0x14CF0** returns `[0x104568FC]+0x28` clamped below at 1.0.
+*Corrected 2026-10-05 against the raw bytes — an earlier version of this section transcribed the flag test as
+`25 00 41 00 00 / and eax, 0x4100`, which is not in this code (and does not even fit the addresses it was listed
+with). Raw dump of RVA 0x14CF0:*
 ```
-0x14CF0  a1 fc 68 45 10     mov  ecx, [0x104568fc]        ; camera object
-0x14CF6  d9 41 28           fld  dword [ecx + 0x28]
-0x14CF9  d8 1d 1c 96 32 10  fcomp dword [0x1032961c]       ; = 1.0f (raw 00 00 80 3f)
-0x14CFF  df e0              fnstsw ax
-0x14D01  25 00 41 00 00     and  eax, 0x4100               ; keeps bit 8 (C0) + bit 14 (C3)
-0x14D04  7a 07              jp   0x10014d0d                ; -> fld [ecx+0x28]; ret
-0x14D06  d9 05 1c 96 32 10  fld  dword [0x1032961c]        ; 1.0f
-0x14D0C  c3                 ret
+8b 0d fc 68 45 10   mov  ecx, [0x104568fc]      ; camera object pointer
+ d9 41 28           fld  dword ptr [ecx + 0x28]
+ d8 1d 1c 96 32 10  fcomp dword ptr [0x1032961c]  ; = 1.0f (raw 00 00 80 3f)
+ df e0              fnstsw ax
+ f6 c4 05           test ah, 5                  ; AH bit0 = C0, bit2 = C2
+ 7a 07              jp   0x10014d0d             ; -> fld [ecx+0x28]; ret
+ d9 05 1c 96 32 10  fld  dword ptr [0x1032961c]   ; 1.0f
+c3                 ret
 ```
+Twin getter **0x14D20** carries the identical encoding (raw `…df e0 f6 c4 05 7a 07 d9 05 …`). This *is* the
+byte-valued NaN-safe idiom (`test ah,N; jp`) — not the degenerate `and eax,0x4100` form. Decoding it from the
+FCOM flag table (C0 = "less", C2/C3 set for equal/unordered) and x86 PF-of-the-masked-byte:
+| tick vs 1.0 | C0,C2 | `test ah,5` result | PF | branch |
+|---|---|---|---|---|
+| greater | 0,0 | 0 | set | `jp` → return raw field |
+| equal | 1,1 | 5 (two bits) | set | `jp` → return raw field |
+| **less** | 1,0 | 1 (odd) | clear | fall through → **return 1.0f** |
+| unordered (NaN) | 1,1 | 5 | set | `jp` → return raw field (NaN passes through) |
 
-As encoded, `jp`'s parity comes from the **low byte** of the mask result, and both retained bits
-(C0 = bit 8, C3 = bit 14) live in AH — so AL is always 0, PF is always set, and the jump to
-`0x14D0D` (`fld [ecx+0x28]; ret`) is unconditional: **the getter returns the field verbatim and the
-`fld [1.0]; ret` arm at 0x14D06 is unreachable.** The NaN-aware form this build uses elsewhere is
-the byte-valued `test ah, 0x5/0x41; jp` (e.g. 0xC6722, 0xA6E37), where the tested value is a byte and
-PF really means C0/C2/C3 parity — that idiom *is* a NaN guard, but it is not what these getters encode.
-So M20's earlier `min(field, 1.0)` with `NaN -> 1.0` reading cannot be defended from this code as written,
-and **nothing in the getter establishes either an upper/lower bound or a unit for the tick.** What
+So the getter is **`max(tick, 1.0f)`**, NaN excluded: it *does* establish a bound — at least one whole tick is
+returned per call — though still no upper bound and no unit. Neither the older `min(field, 1.0)` claim nor this
+section's own previous "returns verbatim / the 1.0 arm is dead" conclusion survives the bytes; both are withdrawn.
+What
 *is* byte-solid (re-read same day) is how the tick is used, the M15 orbit integration:
 
 ```
@@ -572,8 +577,10 @@ Writer hunt for `[camera+0x28]`, this pass: register-pairing sweep (`mov reg,[0x
 `[…reg+0x28] =`, tool `tools/store_after_global_load.py`) returns no object store — only the two getter
 reads and one unrelated word store; intersecting "sweep regions that load the camera global" with
 stores to `[any reg + 0x28]` yields exclusively `[esp + 0x28]` stack slots. Combined with the older
-negative results (register tracking through reassignment/lea/thiscall setters/thunks), the tick's origin
-stays indirect and named: either find a store through a pointer copy (e.g. `lea ecx,[eax+0x28]` + call) or
+negative results (register tracking through reassignment/lea/thiscall setters/thunks), plus two added today —
+zero absolute-reference occurrences of `0x10456924` (= g_pCamera+0x28) anywhere in `.text`, and the
+`--same-region` intersection over the **94** sweep regions that load `[0x104568FC]`, which again yields only
+`[esp + 0x28]` stack slots — the tick's origin stays indirect and named: either find a store through a pointer copy (e.g. `lea ecx,[eax+0x28]` + call) or
 settle it empirically by measuring degrees-turned per second in game while holding E at default distance.
 
 Consequence of the *older* reading (kept for continuity): the `round(tick)` sub-loops (history loop

@@ -788,6 +788,14 @@ returning `entity+0xA0`. Retail never caches a raw actor pointer for these. Faci
 resolves (fn 0xA7324 bails). Details: M28 in [movement.md](docs/movement.md).
 Closed since: the `0x85240/0x85270` candidate-iteration semantics (M14-bis, [movement.md](docs/movement.md) §7 — a find-first/find-next cursor over the actor draw list via link +0x54 from head global 0x1047D578, filtered by an IsKindOf test whose baked-in token names **CXiDollActor**).
 
+**Corrected 2026-10-05 [V] — the camera tick getter.** At RVA 0x14CF0/0x14D20 the flag test is raw `f6 c4 05`
+= `test ah,5`, which decodes to **`max(tick, 1.0f)`** (NaN passes through): a lower bound of one whole tick per
+call *is* proven. This reverses this session-line's earlier "returns the field verbatim / the 1.0 arm is dead"
+note, which rested on a transcription (`and eax,0x4100`) that does not exist at those addresses — and it also
+re-confirms the older `min(field,1.0)` claim was wrong in direction. Two more writer negatives added (zero absolute
+references to 0x10456924; no `[reg+0x28]` store among the 94 regions loading `[0x104568FC]`), so the tick's **unit**
+remains the single open unknown and kuluu's ×8 aim-scale label stands. Details: [movement.md](docs/movement.md) §11 M20.
+
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
 decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,
 movement.md §11 correction); today's whole-file E8 scan re-verified M18's caller census byte-exact
