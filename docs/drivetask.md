@@ -610,3 +610,90 @@ is what one would run.
 Which authored float maps to which world axis is still open (only its slot order is closed): every
 shipped record puts the turn in the **middle** slot and zeroes the outer two, so applying this to an entity
 transform needs the driven class's consumer side read first — not a guessed euler order.
+*(Closed by §13: the middle slot is the actor heading, and the consumer-side read is done.)*
+
+## 13. The driven object identified, and its angle record named (X pass) **[V]**
+
+Read from our build's own RTTI descriptors plus two independent consumers of the same record. Nothing here
+invents an euler order: what is not proven stays unnamed.
+
+### 13.1 `0x1C0` is a real accessor, and it lives on `CXiActor`
+
+The ctor (§5b) reads the start orientation as three consecutive floats through one virtual call:
+
+```asm
+0x5FA64  mov edx, [edi]              ; edi = driven object (arg slot +8)
+0x5FA66  call dword ptr [edx + 0x1c0]
+0x5FA6C  mov eax, [eax]              ; component 0
+...
+0x5FA78  call dword ptr [edx + 0x1c0]
+0x5FA7E  mov eax, [eax + 4]          ; component 1
+```
+
+So the slot returns a **pointer** to a float record — not a float. Enumerating every `lea eax,[<reg>+0x44]; ret`
+in `.text` and looking for data references finds one installed in a vtable: **RVA `0x820F0`**, referenced from
+`.rdata 0x32D1A0` and `0x32E588`; that address is **slot byte `0x1C0`** of the table at `.rdata 0x32CFE0`
+(254 slots). The table's own class-metadata slot (byte `0x0`) is an accessor thunk
+(`mov eax, <ClassDesc>; ret`) pointing to the descriptor `{name="CXiActor", size=196,
+parent=CMoTask}` — the same chain the task-family descriptors sit on. **The driven object is a
+`CXiActor`, and its angle record is `actor+0x44 / +0x48 / +0x4C` with one more float at `+0x50`.** **[V]**
+Class chain (descriptors read from our build, sizes as authored): `XiModelActor` 1940 : `CXiControlActor`
+1476 : `CXiAtelActor` 212 : `CXiActor` 196 : `CMoTask` 52 : `CYyObject`. That is why the two extra write
+destinations of §12.1 fit in one object, and the class test guarding the third one is by descriptor
+(`call 0x1002C8F0(obj, &XiModelActor)` = "is this a model actor", hierarchy walked through `[desc+8]`) —
+**not** a name compare, correcting §6 item 6's wording.
+
+### 13.2 The copy helper is `(dst, src)`, four dwords
+
+`0x10026E90(dst@esp+4, src@esp+8)` moves four dwords `src → dst`; the three-float variant
+`0x10026EB0` is identical without the fourth. §12.1's parenthetical listed the arguments loosely: at both
+call sites in the task the pushes are `push &out; push &driven+0x44`, i.e. **arg1 = `&driven+0x44` (dst),
+arg2 = `&out` (src)** — the lerp result lands *in the actor*, which is what §12.1 then describes as the
+wrapped in-place record.
+
+### 13.3 Component 1 (`actor+0x48`) is the heading — two consumers agree **[V]**
+
+The walker/control function `0xA6240..0xA77A0` reads the record through the accessor and lands it on the
+facing record (M10's `actor+0xE4/+0xE8/+0xEC/+0xF0`, `+0xE8` = yaw):
+
+```asm
+0xA6380/90/A1  call [esi->vt + 0x1c0]   ; components -> [esp+0x3c] (+0), +0x40 (+4), +0x44 (+8)
+0xA63B2        call [esi->vt + 0x1c0]   ; and component 3 through [eax+0xC] -> [esp+0x48]
+0xA63B8        fld  [edi + 0x18]        ; target heading
+0xA63BB        fsub [esp + 0x40]        ; (target − component1), wrapped into ±π
+           ... fmul [0x10329CE4] (= 0.25) ; fadd → lerp toward the target with weight 0.25, re-wrapped
+0xA6457        fstp [esi + 0xE8]        ; yaw   = component1 + 0.25·(target − component1)
+0xA6451/5D/63  mov  [esi+0xE4]/[esi+0xEC]/[esi+0xF0] = components 0, 2, 3
+```
+
+Independent corroboration in the in-world look-at pass (row A1's method): `call [actor->vt + 0x1c0]` then
+`fld [eax+4]; fchs` and hand that to the vector-rotator `0x10027BD0` (`0xD5D04..0xD5D17`) — component **1**
+is the angle used to rotate a direction into actor-local space. Heading, twice, from two unrelated callers.
+
+So for kuluu: the authored triple is `(component0, heading, component2)` in memory order, and every shipped
+record (§10.1) turns only the **heading** — which removes the last blocker on applying ActorRotation.
+Components 0/2 are **unnamed**: no consumer found treats them as pitch or roll (the walker copies them
+into facing-record slots `+0xE4`/`+0xEC`; nothing applies trigonometry to them), and all shipped records
+zero them. Do not label them pitch/roll anywhere in kuluu.
+
+### 13.4 What the task writes, per mode, end to end **[V]**
+
+Both modes perform *both* writes (order differs); `out[3]` is a constant `1.0f` (`mov dword ptr [esp+0x18],
+0x3f800000` @ 0x5FB7C), not an angle:
+
+| mode | steps, in byte order |
+|---|---|
+| **0** (all shipped records) | `copy out→&actor+0x44; wrap components 0/1/2 into ±π` (0x5FCEA..0x5FDD7) → write raw `out[0..3]` to `actor+0xE4/+0xE8/+0xEC/+0xF0` (0x5FDA3..0x5FDCA) → if actor isa `XiModelActor`, mirror the same four floats to `actor+0x744..+0x750` (0x5FDDB..0x5FDFD) |
+| 1 | raw write to `+0xE4..+0xF0` first (0x5FBED..0x5FC13), then copy/wrap the record at `+0x44` as above; **no** `+0x744` mirror |
+
+Both branches end at 0x5FE03, which is where `[task+0x74]` (remaining) is compared to 0.0 — the task's own
+termination test for a later tick.
+
+### 13.5 Reproduce (X pass)
+
+- Accessor hunt: byte-scan `.text` for `lea eax,[<reg>+off]; ret`, then look for its VA in data sections;
+  walk the surrounding run of code-pointers to find the vtable bounds and slot index; read the descriptor
+  thunk at the table start to name the class (`{name*, size, parent*}` — parents chain through `+8`).
+- Virtual-slot census: match `FF <modrm mod=10 reg=2> imm32==0x1C0` — the disp is **disp32** here
+  (`ff 9x c0 01 00 00`), which is why a mod=01 scan finds nothing.
+- Copy-helper direction: read `mov eax,[esp+8]; mov ecx,[esp+4]` at the entry — `eax` (arg2) is the source.
