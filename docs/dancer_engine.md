@@ -99,6 +99,54 @@ keyframe channels — consistent with the J-vs-D layer split), or one of us has 
 §8a work already resolved how those branches select (`jp` ⇒ u ≥ 0.5); what's needed is a caller
 census in **our** build to say which subsystem they serve.
 
+## 4a. D1 evidence pass — verified in OUR build, §4's queue claims hold [V]
+
+Byte-verified this session against our `FFXiMain.unpacked.dll` (retail-2026-9, offset==RVA, base
+0x10000000). Disassembly dumps: `C:/tmp/ffximain_work/d1_*.asm`.
+
+- **MotionQueue_UpdateAllChannels = 0x1A420..0x1A660** (our function table seeds it; sole caller =
+  `Model_AnimateAndPose`, call site 0x1002A27B). Every §4 queue/scratch claim checks out:
+  - Globals pinned: pose scratch **0x1045F030**, stride **0x34** per bone (`add esi,0x34`);
+    blend scratch **0x1045B820**; mask array **0x1045F028**; bone-count global **[0x10462430]**.
+  - Queue layout: 5 base slots at `this+0x50` (stride 0x14) + pending-request list `this+0x34`
+    (+0x3A entry array belongs to the policy descriptor, below); blend pair above `this+0x70`.
+    Sampling order verified: index argument descends **4 → 0**, each active slot
+    (`[slot+4] != NULL`) sampled straight into the shared scratch — last writer wins ✓.
+  - Then up to **2 blend layers** sample into the *separate* blend scratch; per-bone merge runs only
+    where mask byte has **bit7 set AND low-6 nonzero**; rotation merged by an NLerp-style call
+    (0x1A5C0 → `0x33220`, 4 dwords copied out, no renormalise follows ✓), translation and scale by
+    two lerps (`0x276A0`).
+- **No freeze during crossfade — this is the D1 answer.** The slot sampler (0x1B230) walks each
+  slot's motion linked list and calls vtable+**0x38** per element: every layer that remains active
+  is sampled into scratch **every frame**; a blend merges live samples by weight ramp. Nothing in
+  the verified code freezes a pose at transition start. (The slot "update" helper 0x1B340 only
+  counts list nodes.)
+- **ApplyPolicy = 0x19A50..0x1AFD** (sole caller 0x1ABBA, inside the setNextMotion wrapper
+  0x1AB60, which enqueues through scheduler object [0x1047D128] → 0x10072FB0 before policy).
+  Policy reads a float argument against 1e-4 (`[0x1032A1A8]`), then loops authored per-bone
+  entries: count = u16 `[desc+0x32]`, entry array at `desc+0x3A`, **stride 0x54**, bone index first
+  dword. Per bone: skip if mask bit7 clear; skip if bit6 set; low-6 == 0 → handler 0x19B30 (and on
+  true, `mask |= 1`); low-6 == 1 → handler 0x19EE0. Helper 0x19B00 sets bit6 on every bone whose
+  low-6 is nonzero. So "interrupt vs queue" IS the mask machine ✓ — but note it dispatches on
+  *authored per-entry state*, not a single flag.
+- **Open conflict resolved [V]:** caller census finds 46 (0x547A0) + 26 (0x546F0) E8 sites, ALL in
+  ~0x10049Axx–0x1005ECE8 — the CMo* effect-element region (pipeline map §8: OT tasks/elem vtables).
+  **Zero** call sites inside any sqmo motion cluster. DancingMad's "linear-only" holds for motion
+  channels; our two evaluators serve effect curves.
+- Cluster anchors (assert-path strings, full `C:\dev\dancer\modules\sqMotion\src\*.c`): string
+  starts 0x103B79A8 / 0x103BA62C / 0x103BB558 / 0x103BB674 / 0x103BB964; code xref clusters ≈
+  sqmoFrameChannel 0x10293F80–0x102946xx, sqmoMixerMotion 0x1029497x–0x102956xx, sqmoKeyChannel
+  0x102957B4–0x10295D3x. Function starts enumerated in `C:/tmp/ffximain_work/d1_*.asm`.
+- **Token mystery closed:** the "class-name tokens" in mob_evidence §Raw references are plain
+  name strings followed by a u32 length (`CYyMotionQue` starts at **0x3510A8**, `len=11` follows at
+  0x3510B8). The `?` was an ASCII-dump boundary artifact from the preceding float byte 0x3F. No MSVC
+  RTTI (`.?AV`) exists for dancer classes in our build; vtables are packed function-pointer tables
+  with no class header.
+- Still [web], not verified here: key-channel record offsets (`entrySize`+28/`timeSpan`+32/
+  `interp enum`+36/`numKeys`+40) — the sqmoKeyChannel region disasm (d1_keychannel.asm) is at hand
+  but the per-channel interp-enum read was not pinned to a function; moot for D1 given the negative
+  evaluator census above.
+
 ## 5. Bone hierarchy & skinning — leads for the pose path [web]
 
 - `CMoSkeletonElem::UpdateBoneTransform`: normalize a bone's local Euler rotation (three floats at
