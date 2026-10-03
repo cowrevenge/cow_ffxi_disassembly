@@ -203,29 +203,39 @@ Ctor facts (`0x5FA20..0x5FAD9`, **verified**):
 - `fild dword …` of an integer argument, stored to `[task+0x74]` and `[task+0x78]` (matches the
   update's countdown use: `+0x74` ticked against clock dt, per §4).
 
-**Arg-slot mapping — mostly resolved; one slot unexplained [V/I].** Frame arithmetic rule (I got this
-wrong on the first pass and corrected it): args sit at `entry esp + 4, +8, …`; inside the body, after
-the ctor's own four pushes (`push ebx/esi/edi` + `push eax` = 0x10 bytes), an arg at entry offset *A* is
-read at **body `esp + A + 0x10`**.
+**Arg-slot mapping — the *set* feeding each destination is [V]; the float-to-axis pairing stays [I].**
+Frame rule, verified against the ctor prologue: args sit at `entry esp + 4k`; after a body has pushed
+`P` bytes below its return address, arg *k* reads at **body `[esp + P + 4k]`**. A callee that pops its
+own stack arguments (`ret imm`) *reduces* the later `P`, so raw displacements on either side of such a
+call are not comparable — reading them as if they were is what produced this section's earlier
+"exactly one mapping is wrong" claim. There was no contradiction in the binary.
 
-| entry slot | handler source | read in body at | lands in |
-|---|---|---|---|
-| +0x4 | `esi` (scheduler/script ctx) | `mov eax,[esp+4]`; `mov edi,[esp+0x14]` | passed to base ctor; also used as the object of virtual `[vfx+0x1C0]` |
-| +0x8 | result of `lookup_62770(ctx)` | `mov ecx,[esp+0x18]` | **`[task+0x7c]`** — consistent with the update loop's null-test on that field ✔ |
-| +0xC | `(int)byte[record+0x14]` | — (not located) | **unexplained** |
-| +0x10 / +0x14 / +0x18 | `record[+8] / [+C] / [+0x10]` | one is read with `fild` (`dword`→integer) for `[+0x74]/[+0x78]` | start/duration-ish fields |
-| +0x1C | `_ftoll(authored word × [ctx+0x9c])` | — (not located) | **unexplained** |
+Push order in **both** handlers (0x5B392 for stage `0xA9`, 0x5B3DF for stage `0xAA`; they join at the
+shared tail `jmp 0x1005b42a`) fixes which arg index carries which record field, and each destination is
+reached by exactly one of them:
 
-The three values converted by π/180 are read in the body as `fld dword [esp+0x1C]` (twice → `[+0x90]`,
-`[+0x94]`) and `fld dword [esp+0x20]` (→ `[+0x98]`). Under the frame rule those correspond to entry
-slots **+0xC** and **+0x10**. +0x10 is a record field (fine, float), but **+0xC is the zero-extended byte
-from `record[+0x14]`**, which cannot legitimately be loaded as a float. So **exactly one mapping is
-still wrong somewhere** — likely my assumption that every push at 0x5B41D..0x5B429 belongs to this ctor,
-or that the byte at `record+0x14` is really a byte field (it may be two bytes: mode + something, or the
-pushed register is not what I paired it with). **Do not use arg-slot identities in kuluu code until that
-single inconsistency is closed.** Cheapest closers: simulate the handler's stack mechanically against the
-task fields after construction (live debug), or read member names from PS2 DWARF / DancingMad's
-reconstruction instead of inferring offsets.
+| entry slot | handler source (push order) | lands in |
+|---|---|---|
+| +0x4 | `esi` scheduler/script ctx | base ctor only (`[esp+4]`, read before any push) |
+| +0x8 | result of tail resolver `call 0x10062770` | the **driven object**: receiver of the three virtual `[obj+0x1C0]` getters whose results are stored to `[task+0x80/+0x84/+0x88]` (the captured start orientation) |
+| +0xC | `(int)byte[record+0x14]` — the mode byte | **`[task+0x7c]`** (store at 0x5FA41): exactly the field the update null-tests and then branches on as `{0,1}` (§12.1) |
+| +0x10 / +0x14 / +0x18 | `float record[+8] / [+C] / [+0x10]` | `[task+0x90] / [task+0x94] / [task+0x98]` **in that order** |
+| +0x1C | `_ftoll(int16[record+6] × [ctx+0x9c])` | `[task+0x74]` *and* `[task+0x78]`: `fild dword [esp+0x28]` at 0x5FA58 feeds both (`fst` + `fstp`) |
+
+The pairing is closed by counting each callee's own stack cleanup, which is the step that was missing
+every earlier time this section moved: prologue pushes `ebx/esi/edi/eax` (P=0x10), but **`call
+0x10074790` returns `ret 4`** and takes its argument back, so from 0x5FA2F on the frame sits at P=0xC;
+`0x1003b540` is `ret 0`; the embedded-object ctor `0x1003b7b0` is also `ret 4`, again leaving P=0xC
+across the whole angle-capture region. With that, every displacement solves to exactly one entry slot:
+`[esp+0x18]→arg3` (mode), `[esp+0x14]→arg2` (driven object), `[esp+0x28]→arg7` (duration),
+`[esp+0x1C]@P=0xC→arg4`, then after the `pop edi` at 0x5FAB0 (P=0x8) `[esp+0x1C]→arg5` and
+`[esp+0x20]→arg6`. No cell is left unexplained, and record order reaches the three target slots
+unshuffled — pairs `+0x80/+0x90`, `+0x84/+0x94`, `+0x88/+0x98`.
+
+What this does *not* name is what those three axes mean in world terms (which of the driven object's
+`+0x44/+0x48/+0x4C` slots is yaw and which are pitch/roll); that needs the consumer side of the driven
+class, not more of this one. Every shipped record leaves the outer two at `+0.0f` and puts the turn in
+the middle slot (§10.1), so this axis is the only one with observed retail usage.
 
 ## 6. What this pass still does NOT know [O]
 
@@ -545,3 +555,58 @@ conclusions from the wider/uncapped dump are §9.4 and the §9.5b carrier table.
 
 `tools/dat_stage_scan.py` gained matching discipline: tallies routines by chunk type, filters with `--chunk 07`,
 warns on unfiltered dumps, and flags stage lengths ≥16 dwords outside `0x07` as noise.
+
+## 12. ActorRotation: dispatch identities and the update law (closed bytes) **[V]**
+
+Read from the interpreter's own jump table rather than inferred from handler adjacency — §5a's "nearest
+preceding table target" method finds *a* handler but silently mislabels which stage byte reaches it, so
+every entry below is a direct table read of `.rdata 0x1005DC1C` with `case = stage − 2` (§10).
+
+| stage | case | handler | gate resolver before construction |
+|---|---|---|---|
+| `0xA9` | 167 | 0x5B392 | `call 0x10062770`; then jumps onto the shared tail from 0x5B3DD |
+| `0xAA` | 168 | 0x5B3DF | `call 0x100627D0` |
+
+Both handlers allocate `push 0xa0` (the descriptor size again — third independent confirmation) and join
+the same argument tail at **0x5B42A**, so they build the *same* task from the *same* record layout (§10.1's
+five shipped records are stage `0xA9`; `0xAA` stays unobserved here). The only runtime difference between
+the two stage bytes is which resolver gates construction.
+
+### 12.1 `update` — what it actually computes (region 0x5FB30..0x5FE10)
+
+```c
+// CMoActorRotationDriveTask::update, FFXiMain.dll retail-2026-09
+if (task->mode /*+0x7C, from record byte +0x14*/) {         // 0x5FB36 — mode == 0 skips the timer
+    if ((task->remaining /*+0x74*/ -= clock_dt()) <= 0.0f) k = 1.0f;        // 0x5FB3D..0x5FB5F
+    else                        k = 1.0f - remaining / task->duration /*+0x78*/;  // fdiv 0x5FCDC, fsubr 0x5FCDF
+}                                                          // mode == 0 takes k := 1 straight away (0x5FB61)
+out[i] = (to[+0x90,+0x94,+0x98][i] - from[+0x80,+0x84,+0x88][i]) * k + from[i];   // 0x5FB67..0x5FBBa
+```
+
+So the authored floats are an **absolute orientation**, not a delta — retail lerps live→authored starting
+from the value captured at construction. `clock_dt()` is J pass's same clock global (`[0x1047BFA8]+0xEB0`).
+
+Then the driven object receives it:
+
+- The driven object comes from the task's embedded sub-object: `call 0x1003B6D0` with `ecx = task+0x34`.
+  It returns that link's `[+0xC]` target straight through when its selector word at `[+0x1C]` holds a
+  sentinel, and otherwise routes through the manager `call 0x10081550`. **[V]** for the bytes; what the two
+  arms mean (bound vs unbound link) is **[I]**.
+- Helper `call 0x10026E90(&out, &driven+0x44)` is a straight **16-byte copy**: the driven object's angle
+  record at `+0x44/+0x48/+0x4C` (plus one more float slot at `+0x50`) takes the lerp result.
+- Each stored angle is then wrapped into ±π with this layer's approximate pair — `fsub [6.283]` when over
+  +π, `fadd [6.283]` when under −π (component 0 tested at 0x5FC2A / 0x5FC48, and the same pattern for
+  `+0x48`/`+0x4C`). Same wrap convention as §5 — deliberately **not** J pass's exact ±π pair.
+- One write path also stores the four floats to `driven+0xE4..+0xF0`; a third writes `driven+0x744..+0x750`
+  behind `call 0x1002C8F0(driven, <name>)`, whose meaning is **[I]**. Which path runs branches on the same
+  `[task+0x7C]` field (`sub eax,0 / je`, then `dec eax / jne`, at 0x5FBCF..0x5FBDC).
+
+Consequences for kuluu: reproduce *capture-at-fire → lerp by* `1 − remaining/duration` *→ wrap into ±π with
+this layer's approximate pair*. The timer only runs when the record's **mode byte is non-zero** — and all
+five shipped records (§10.1) carry mode 0, so **every ActorRotation stage in this install sets the
+orientation on the spot**; there is no observed retail *animated* case to prioritize, though the law above
+is what one would run.
+
+Which authored float maps to which world axis is still open (only its slot order is closed): every
+shipped record puts the turn in the **middle** slot and zeroes the outer two, so applying this to an entity
+transform needs the driven class's consumer side read first — not a guessed euler order.
