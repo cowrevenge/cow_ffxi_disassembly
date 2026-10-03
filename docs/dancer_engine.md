@@ -190,3 +190,22 @@ Byte-verified this session against our `FFXiMain.unpacked.dll` (retail-2026-9, o
 
 §3 listed `CMoLockLookAtDriveTask` / `CMoActorRotationDriveTask` together as the look-at lead. They are **two different mechanisms**
 in our TDS 0x6A995428 build, so they must be treated separately: ActorRotation converts authored degrees (three pi/180 fmuls in its ctor); LockLookAt does not touch any degrees float and carries no angle operand - it aims a joint at the locked target by geometry. Full evidence + the stage-stream feeder boundary (`interpret` has exactly two external callers, both gating through `0x57C20`) is in [drivetask.md](drivetask.md) §8; joint-look consequence in [joint.md](joint.md) §9a. Neither class's numbers extracted yet - S3 parked pending DAT access.
+
+## 5b. Verified in OUR build: dancer bone state is persistent frame-to-frame — an unkeyed node keeps last frame's transform **[V]**
+
+Evidence (bytes in [lookat.md](lookat.md) §E.9, all read against TDS 0x6A995428 this pass). The model holds a live
+node array `[this+0x14]` — node index from `call 0x35390`, entry stride 64 (one 4×4) — and pass 2 of the bend *loads*
+that transform (`mov edx,[edi+0x14]; shl esi,6; add esi,edx` at 0x2B004..0x2B00F, then `rep movsd` copying 16 dwords
+at 0x2B018), converts it to a quaternion (call 0x32E70 at 0x2B021) and multiplies its own contribution onto it
+(0x32B50 twice, 0x2B066/0x2B06D) before writing the per-bone override entry `0x1045F030 + bone*0x34`. A pass whose
+only access to a node is read → multiply → store into another table is coherent only if that transform survives from
+frame to frame; nothing here rebuilds it from the bind pose, and the override entries are likewise read-modify-written.
+
+**Kuluu consequence (landed `476ea336`).** A joint no active clip keys must keep its previous local transform. kuluu's
+pose pass re-derived every unkeyed joint from bind each frame, so a sparse clip — turn-in-place while engaged resolves
+from the battle set first — pulled an equipped weapon back to its bind position (play-test row P3). `carry_unkeyed_channels`
+(ffxi-actor/src/skeleton_instance.rs) is that memory, cleared with the coordinator on a pose-state reset.
+
+Tier: **[V] for every byte above**; "persists frame-to-frame" is the reading those bytes force rather than an
+independently observed initialisation. If anyone needs it nailed harder, the settling read is whoever allocates and seeds
+`[this+0x14]` — confirm entries are seeded from bind once at model load, not re-seeded per frame.
