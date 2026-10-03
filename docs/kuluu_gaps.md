@@ -88,3 +88,45 @@ Nothing below needs more DLL work first — the C4 port landed 2026-10-04 (jw-st
 3. **A5**: **settled by `4dea93d2`:** bend bones come only from reference slots {3, 7}; `find_head_neck` still serves `apply_head_look`/`zz-head-axis` but no longer drives the look-at. It was: is it fine to
    change head/neck bone selection semantics for *all* models? It moves the pivot on non-humanoid rigs, and the
    census says that is what retail does.
+
+## G. Play-test bugs reported 2026-10-05 (kuluu bugs, not DAT/research bugs) **[open]**
+
+Shane's three in-game bugs, stored so any session can run them. The order inside each row is his: work the list, stop
+at the first hit; fix at the root; no snap-on-top patches. One commit per fix.
+
+| # | Symptom | Diagnostic order (stop at first hit) | Status |
+|---|---|---|---|
+| **P1** | S3 regression: shoulders turn, head does not. Shoulder moving + head still = record 0 bends nothing. Test on **Mithra**. | (a) A5 gate drops record **1**, never record **0** — if inverted, flip it. (b) Head look must still run when the engage leg-split layer is active (applied to `world_pose` after composition). (c) Bend lands on `references[3].index`, not a hardcoded neck joint. (d) Last: dump parsed `(xlim, ylim, scale)` for records 0 and 1 for Mithra — record 0 == (0,0) means the parser **offset** is wrong (accessor `0x3522A`: `data + 0x34 + u16[data+0x32]*30`, then `+4 + u16*26`, then `+0x48`; 12-byte records). | open — (a)(b)(c) read clean this pass (§G.1); **(d) is the live hypothesis** |
+| **P2** | Locked camera: A/D should circle-strafe *with the camera staying on the target*; kuluu freezes the camera reference at lock time. Retail recomputes it every frame from player->target bearing. | One read then port: in `UpdatePlayerFollowingCamera` (0x1EE60..0x20B9B) find the locked-target branch's store to `[0x10456DB4]` and what it is computed from; record [V]. Port as **reference = live bearing while locked, C4 spring law otherwise — same spring, moving reference. No separate orbit mode.** | open (read not yet done) |
+| **P3** | Weapon floats when turning in place while engaged — weapon not following the hand. | (a) Attach must read the **current frame's** `world_pose` at the hand reference (126/127, `standard_joint_world_position`) every frame, after `advance_actor_pose`; cached-at-draw or read-before-pose gives exactly this float. (b) With `use_battle`, TurnInPlace resolves from the battle set first — confirm resolved chunks key the arm/hand joints; a sparse battle turn clip + `pose_clip_matches` dedup dropping the base arm chunk is the bug. (c) Only if both clean: check the weapon DAT's own animation dir is loaded into `anim_dirs`. | open |
+
+### G.1 P1 checklist — what already cleared this pass (kuluu working tree)
+
+- (a) **not inverted**: `look_at_bend_records` (`kuluu-render/src/look_at_gates.rs:34-42`) returns 1 only for the
+  one-record statuses and `BEND_RECORDS_MAX`(2) otherwise; standing (`NONE`) correctly takes 2, matching the retail
+  chain at RVA 0x2AE0D..0x2AEBB (pinned by `only_standing_bends_two_records` :177-183).
+- (b) The bend is a single post-composition pass over the final `world_pose` (`ffxi_actor_render.rs:3261-3268`) and
+  runs for every tier/layer combination including the engage leg split — nothing in the split path skips it.
+- (c) Joint comes from the slot, not a hardcoded neck: `BEND_SLOTS = [NECK(3), CHEST(7)]` (`look_bend.rs:39`) resolved
+  via `skeleton.reference_at(slot).map(|r| r.index)` (:57); test `each_record_uses_the_joint_its_slot_names` (:390-400)
+  asserts it is *not* `NECK + record`.
+- -> P1 therefore hinges on (d): per-model parse offsets. Records must be dumped for Mithra **and** Tarutaru; the
+  earlier "no bend for tarutaru/goblin" reading was already flagged as a flawed search, so suspect the table walk
+  (bone count `u16[data+0x32]` x30, second table `u16`x26, then +0x48) before believing any zero.
+
+### G.2 P2 kuluu anchors
+
+All in `kuluu/src/view_native/camera_collision.rs`: spring law `spring_orbit` :52-59; per-frame ref capture
+`spring_ref = if settings.camera_spring && !snap_to_anchor && steer_event { Some(manual_yaw) }` :361-366 where
+`manual_yaw` is previous-leash yaw vs `chase.yaw` and is **0 while the lock turn owns yaw** (:311-321); consumer
+:387-390; carried state = `LeashState { focus, eye, yaw, was_locked, release_yaw }` :117-132. Today there is no
+moving reference at all while locked — exactly the symptom.
+
+### G.3 P3 kuluu anchors
+
+Hand refs `LEFT_HAND(126)/RIGHT_HAND(127)` exist (`ffxi-dat/src/skel.rs:4-17`) but nothing consumes them for
+equipment; equipped items spawn parented to the actor root (`dat_vos2.rs:2248-2416`). Per-frame resolver is
+`standard_joint_world_position` (`skeleton_instance.rs:306-315`), which must be read **after** `advance_actor_pose`
+(live pose loop ends at :4892 in `tick_live_ffxi_actors`). Battle dedup: `pose_clip_matches` overlay-first then
+primary, keyed on exact chunk id (:2317-2330); per-slot registration `[Option<(DatId,bool)>;8]` (:3092-3112). Known
+caveat in tree: non-PC skeletons can resolve hand refs near the root (`skeleton_instance.rs:388-391`).
