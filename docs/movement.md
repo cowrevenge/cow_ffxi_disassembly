@@ -325,6 +325,45 @@ The mouse wheel (0x1F8B6..0x1F93D) is the same path: gated by
 `CFsConf6Win::Check()` (0x25E050), delta from 0x25E200; positive delta
 integrates +tick·6.0 with the 900.0 clamp, negative −tick·6.0 with the
 242.0 clamp; after any change it notifies 0x25E230 and stores via 0x15290.
+*Re-read byte-for-byte 2026-10-05 and extended:*
+
+```
+0x1F8B6  e8 95 e7 23 00   call 0x1025e050      ; CFsConf6Win::Check()
+0x1F8BB  84 c0            test al, al
+0x1F8BD  0f 84 a5 00 00 00 je tail 0x1001f968
+0x1F8C3  e8 38 e9 23 00   call 0x1025e200      ; delta = accumulated wheel counter
+0x1F8CA  7e 3f            jle 0x1001f90b       ; >0 arm
+0x1F8CC  e8 ef 59 ff ff   call 0x100152c0      ; focal getter (cam+0x2F4)
+0x1F8D5  e8 16 54 ff ff   call 0x10014cf0      ; tick
+0x1F8DA  d8 0d e8 a3 32 10 fmul [0x1032a3e8]   ; * 6.0
+0x1F8E0  d8 44 24 10      fadd [esp+0x10]      ; focal + tick·6.0
+0x1F8E8  d8 1d d8 a3 32 10 fcomp [0x1032a3d8]  ; vs 900.0 -> mov 0x44610000 @0x1F8F7
+0x1F8FF  e8 2c e9 23 00   call 0x1025e230      ; clear the counter after applying
+; negative arm 0x1F90B: same shape with fsubr and `mov dword [esp+0x10], 0x43720000`
+;   (= 242.0) @0x1F93D, clamp compare against [0x1032a3d4]
+```
+
+The counter behind the accessor is one global, `g_wheelAccum` **0x1067A298**
+— a `.text` census finds exactly 7 touches, all inside this accessor family:
+getter **0x25E200** (`a1 98 a2 67 10`: `mov eax,[g_wheelAccum]`), adder
+**0x25E210** (`8b 44 24 04 / 8b 0d … / 8d 14 41 / 89 15 …`: acc += **2 × arg**),
+clear-to-zero **0x25E230**, and a step-toward-zero helper **0x25E240**
+(`if (acc<0) ++acc else if (acc>0) --acc`, reached through the thunk jmp
+0x25E0E0). Two producers feed it:
+
+* **0x1DD8** (`callers: 0` — dispatched, not directly called): a signed
+  divide-by-120 via magic multiply (`b8 89 88 88 88 / f7 e9 / 03 d1 /
+  c1 fa 06`, then the `shr 0x1f`/`add` rounding pair) whose quotient is
+  pushed to the adder — i.e. Windows' ±120-per-notch wheel delta becomes
+  signed notches, so **positive accumulator = scroll up** and it takes the
+  `+tick·6.0` arm (tightens the projection toward 900).
+* **0x1245FF**: sign-extends the low WORD of its argument
+  (`0f bf d7`, `call 0x1025e210`) before forwarding it, also undispatched.
+
+Since only the accumulator's *sign* reaches the arms (magnitude is dropped
+after one step per frame), a multi-notch flick moves focal no faster than
+one notch — the doubled unit of the adder matters to 0x25E240's decay, not
+to the zoom.
 
 Focal getter/setter pair on the camera manager (object @ [0x104568FC]):
 value getter **0x152C0** reads `+0x2F4` (what the integrator reads), setter
