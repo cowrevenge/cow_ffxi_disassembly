@@ -66,9 +66,58 @@ Per-actor update; the call we can actually locate is an `E8` at **0xCCA03** into
 **Target.** Local player → `GetLockedTarget(g_pInputMng)` (`0x157CF0`, call at 0xD5B80). NPCs/mobs → own target
 (`0x845E0`, call at 0xD5B89) **[V(me)]**.
 
-**Gates.** Target status predicate `0x84400` (6 call sites in the method) must yield ∈ {0,1,2,6,7,8}; own status
-predicate `0x84390` (7 sites) ∈ {0, 0x2F, 0x30}, or one of the mount predicates `0x84330 / 0x84350 / 0x84370`
-(each once) **[V(me)]**. Gate failure ⇒ release.
+**Hold precedence and the suppression bit.** Two bits of an actor flag dword gate the frame before target
+selection even runs:
+
+```
+0xd5b49  mov   ecx, [esi+0x840]
+0xd5b51  and   ecx, 1                     ; bit 0 = hold
+0xd5b57  jne   0xd5b6c                    ; not held -> target selection at 0xd5b6c
+0xd5b59  test  al, 2                       ; held: bit 1 = LockLookAt suppression (§B below)
+0xd5b5b  jne   0xd5b6c                     ;       set -> fall through to selection despite the hold
+0xd5b5d  mov   dword [esi+0x854], 0x3f800000    ; +1.0 = hold; jmp tail 0xd5cae — selection and
+                                              ; both gate chains are skipped entirely while held
+...
+0xd5b6c  call  dword [vtable+0x304]        ; a "can-look-at?" virtual; al == 0 -> skip GetLockedTarget
+0xd5b7a  call  0x157cf0                    ;   local player: GetLockedTarget(g_pInputMng)
+0xd5b87  call  0x845e0                     ;   otherwise: own target
+0xd5b90  test  byte [esi+0x840], 2         ; suppression bit -> xor edi,edi (treat as *no target*)
+0xd5ba8  je    tail                        ; null target -> mode = -1.0 release via tail
+0xd5bae  cmp   edi, esi; je tail           ; self-target guard: looking at yourself releases too [V(me)]
+```
+
+So a held aim (`+1.0`) ignores the gates until suppression (bit 1) pre-empts it, and the method never
+selects through its own vtable probe without the caller's blessing **[V(me): 0xD5B49..0xD5BB0, gates.out]**.
+
+**Gates — re-read to the byte before porting them (2026-10-03).** §B originally paraphrased this chain as
+"target status ∈ {0,1,2,6,7,8}; own status ∈ {0, 0x2F, 0x30}, or mount predicates". The counts are right
+(`0x84400` ×6 at 0xD5BB8/BC3/BD9/BDB/BE7/BF3; `0x84390` ×7 at 0xD5C03/C0E/C1A/C2D/C39/C4C/C51 — the same
+method, each call testing one value) but say nothing about what those predicates *read*, and kuluu's port
+needed more than that **[V(me), gates.out]**:
+
+* `0x84400` = **target-type** predicate: returns sign-extended `byte[inner+0xEE]`, where `inner` is the
+  actor's inner data `[actor_this+0x70]`; null inner falls back to a global at `0x1047D610`
+  (`movsx eax, byte ptr [eax+0xee]` @ 0x84407). The six sequential equality tests accept
+  **{0, 1, 2, 6, 7, 8}**; any other value takes the release path — mode `−1.0` is written at 0xD5B9E for
+  every frame that ends without a live target (suppressed or gated), then jumps to the tail.
+  No wire provenance for that byte has been located yet — see §B-port below.
+* `0x84390` = **own-status** predicate: returns sign-extended `byte[inner+0x170]` (@ 0x84397), same global
+  fallback (`0x1047D60C`). That inner byte *is the wire ANIMATIONTYPE* — XIClient keeps it as the actor's
+  GameStatus, and vendor `vendor/server/data/enums/animation.yaml` names every value in the chain below.
+  This is what lets kuluu gate on data it already snapshots instead of inventing a status enum **[V(me)]**.
+* The three "mount predicates" are thin wrappers that tail-jump (`0x84337/0x84357/0x84377`), not value tests:
+  `0x84330 → jmp 0x95790` = the `/sitchair` block — equality chain over **0x3F..0x53** (@ 0x957A1..0x95808;
+  the enum names `sitchair_0..10` only as far as 73, bytes 74–83 are unnamed); `0x84350 → jmp 0x95680` =
+  **== 5** (chocobo, @ 0x95691); `0x84370 → jmp 0x956a0` = **== 0x55** — decimal 85, vendor's `MOUNT`
+  (@ 0x956B1). Each helper takes a candidate byte and falls back to reading `[ecx+0x170]` itself when handed
+  the sentinel `0xff` — every call site in this chain passes the real own-status byte, so that fallback is
+  unreachable from here **[V(me)]**.
+* Net allowed own-status set: **{none(0), chocobo(5), sit(47 = 0x2F), ranged(48 = 0x30), 63..=83
+  (0x3F..0x53 /sitchair block), mount(85 = 0x55)}**. Any other byte — attack, death, event, the fishing
+  run — releases.
+* A gate miss does **not** abort the method: every gate-fail path jumps to the tail at `0xD5CAE`, which skips
+  the look-point *update* but still runs the frame's weight ramp and bone transforms (release mode). Only the
+`0x84670` early-out (`bit 5 of word [inner+0x120]` @ 0x84677) returns without running that tail **[V(me)]**.
 
 **Look point.** The target's **attach point 3**: virtual `[target_vt + 0x1C4](3)`; if `target+0xB2 != 0`, subtract
 1.2 from Y — constant `1.2f` at `.rdata 0x32A404`, referenced in the method at **0xD5C86 [V(me)]**. Stored into the
@@ -92,11 +141,59 @@ at `.rdata 0x35F5FC` (that block reads as a vec3 `(20.0f, 0, 0)` followed by `1.
 **[V(W2)]**, with the forward magnitude noted **[I]** — consistent with "look at something far ahead = straight".
 Alternate rate: `[obj_vt + 0x144]() × 0.01 × 0.04` when `0x87060()` is true (frame-scaled) **[V(W2)]**.
 
-**LockLookAt stage (scheduler 0x89) suppresses tracking.** Its bit 2 ⇒ treated as *no target* ⇒ release; its
-watchdog ends the stage when the actor moves ≥ **1.0** unit or the authored duration expires **[V(W2)]**. That is
-the behavioural counterpart of the DAT records counted in [drivetask.md](drivetask.md) §9.1/§10.1: 504 shipped
-`0x89` records, duration-only operands ⇒ actions/emotes freeze the head for N ticks or until you step, then it
-resumes.
+**LockLookAt stage (scheduler `0x89`) suppresses tracking — bit placement and watchdog settled on bytes
+(2026-10-03).** The suppression is **bit 1 of the actor flag dword `[actor+0x840]`**:
+set by the spawned task's constructor (`or ecx, 2` @ RVA 0x5F4A8 ← handler for stage `0x89` at RVA 0x5B14C),
+cleared when that task tears down (`and ecx, 0xFFFFFFFD` @ RVA 0x5F68B), and read by the look-at method twice
+— `test al, 2` at 0xD5B59 (hold precedence) and 0xD5B96 (⇒ *no target* ⇒ release). While it is set the actor
+behaves as if it has no look-at target **[V(me), ctor.out / watchdog.out / gates.out]**.
+
+The stage's task holds **remaining duration** (`+0x74`: `fild` of the operand word — direct, see below — stored
+at 0x5F47A; each tick `fsubr` clock dt read from global `0x1047BFA8` at `+0xEB0`, RVA 0x5F620) and **anchor
+snapshots of the actor's own X/Z** taken in its constructor (`[edx+0x1BC]` position accessor writes →
+`[task+0x78]` @ 0x5F4C6, `[task+0x7C]` from `+8` @ 0x5F4DB). Each update compares the anchor **componentwise
+against the actor's current horizontal position** (subtract @ 0x5F5AA / 0x5F60F vs `.rdata 1.0f`) — there is no
+vertical axis in it. So the watchdog ends the stage when the actor stands more than **1.0 yalm from where the
+stage fired**, not on accumulated travel **[V(me)]**.
+
+Per-task lifecycle, and why kuluu tracks one task per firing rather than a merged window: set/clear is done by
+each individual task (`or 2` in ctor @ 0x5F4A8, `and ~2` at teardown @ 0x5F68B) — two overlapping `0x89` stages
+can outlive each other's bit, so a released stage must not re-arm while its interval still covers **[V(me)]**.
+
+That is the behavioural counterpart of the DAT records counted in [drivetask.md](drivetask.md)
+§9.1/§10.1: 504 shipped `0x89` records, duration-only operands ⇒ actions/emotes freeze the head for N ticks or
+until you step ~1 yalm off the anchor, then it resumes.
+
+**On the duration's scale — earlier note corrected.** A prior pass claimed retail converts the authored word
+to clock units via `[ctx+0x9c]`. These bytes show no such multiply: stage handler 0x5B14C pushes an operand,
+ctor 0x5F469 does `fild dword [esp+0x18]` and stores it straight to remaining-time at 0x5F47A — the word
+becomes float ticks **unscaled**. kuluu treating scale as 1 (routine-clock frames) is exactly what these bytes
+show **[V(me), handlers.out / ctor.out]**; where `[ctx+0x9c]` came from was never byte-verified, and nothing
+cited to it here stands.
+
+### B-port — landed in kuluu as row 4 (commit `a0583409`, branch `jw-stack-815`) **[V(me)]**
+
+What the port took from this section, where it lives:
+
+* gate sets (§B "Gates") → module `kuluu-render/src/look_at_gates.rs`: `look_at_allowed` (the own-status set;
+  gates applied in the pose pass in `ffxi_actor_render.rs`, before aiming) and its bend-record companion from
+  §E.6's equality chain;
+* suppression + watchdog → `StageKind::LockLookAt` (`opcode 0x89`) in `ffxi-dat/src/scheduler.rs` (operand =
+  signed word at `record+6`, unscaled), intervals via `lock_look_at_intervals_at/now` in
+  `kuluu-render/src/scheduler_runtime.rs`, task state machine (per-stage anchor snapshots, horizontal-only,
+  `LOCK_WATCHDOG_DISTANCE_YALMS = 1.0`) in `look_at_gates.rs`;
+* own-status source → the wire animation byte (`SnapshotActorState.animation`; `RANGED: u8 = 48` added to
+  `ffxi-proto/src/decode/animation.rs`, which was missing it — vendor-derived).
+
+Visible consequence, flagged when it landed: actors mid-attack (LSB sets `animation = Attack` at engage),
+dead, event and fishing no longer track their target. Byte-faithful; if retail observation disagrees, this row
+reopens first.
+
+Still open on this row (not implemented — no wire equivalent located yet): the **target-type sub-gate**
+`byte[inner+0xEE] ∈ {0,1,2,6,7,8}`. `EntityLook::Door/Transport` in kuluu's snapshot is a candidate
+correspondence but that mapping is unlocated; until it is, don't implement this sub-gate on a guess.
+Separately unmodelled: the "hold" mode semantics (bit 0 of `[actor+0x840]`, §B hold precedence) and retail's
+`[target+0xB2]` look-point variant.
 
 **The "bend" is found (W3).** The consumer of `model+0xB0..B8` + weight, the ellipse clamp it applies, the shoulder
 share and the authored limits that feed both are now byte-verified in **§E below**; the earlier "angular clamp

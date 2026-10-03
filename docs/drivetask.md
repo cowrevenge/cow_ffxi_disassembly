@@ -487,9 +487,17 @@ count from the `cmp` bound (**[V]** — this is a trap worth remembering for any
 
 | record | data found in shipped DATs | matches |
 |---|---|---|
-| **`0x89` LockLookAt** (case 135) | **504 records**, all `len=3`; **every byte after record+0x08 is zero**; the only operand is a signed 16-bit duration at `record+6`, taking just 13 distinct values (192 ×200, 800 ×133, 274 ×56, 84/98/86/178/148 …) | §5b/§8: args are (task, actor resolved from the runtime link slot, duration). **No angle, no limit** — now seen in data, not just inferred from absence. Its *function* is now known [V(W2)]: while active it makes the actor behave as if it has no look-at target ([lookat.md](lookat.md) §B), and its watchdog ends on ≥1.0 unit moved or duration expiry |
+| **`0x89` LockLookAt** (case 135) | **504 records**, all `len=3`; **every byte after record+0x08 is zero**; the only operand is a signed 16-bit duration at `record+6`, taking just 13 distinct values (192 ×200, 800 ×133, 274 ×56, 84/98/86/178/148 …) | §5b/§8: args are (task, actor resolved from the runtime link slot, duration). **No angle, no limit** — now seen in data, not just inferred from absence. Its *function*: while active the actor behaves as if it has no look-at target; its watchdog ends **1.0 yalm from where the stage fired**, not on accumulated travel ([lookat.md](lookat.md) §B, resolved on bytes 2026-10-03) |
 | **`0xA9` ActorRotation** (case 167) | 5 records (`ROM3\0\43.DAT`) with `pitch=+0.0f`, `yaw ∈ {+90,−90,−135,+45}`, `roll=+0.0f` at `+8/+C/+0x10` | the ctor's three ×π/180 conversions. The **mode byte at `record+0x14`** is the fifth payload dword — past kuluu's four-dword print cap, which is why §9.3 logged it as "unprinted" instead of reading it |
 | **`0xAA` ActorRotation variant** (case 168) | **zero occurrences** in any chunk-`0x07` stream of this install | not a contradiction; unobserved here. Coverage is still limited to chunk `0x07` (§9.4) |
+
+Task lifecycle for `0x89`, byte-resolved in the same pass (scratch `C:/tmp/row4/`): ctor RVA `0x5F450` sets
+suppression bit 1 of `[actor+0x840]` (`or ecx, 2` @ 0x5F4A8), snapshots remaining duration from the operand
+word **unscaled** (`fild dword [esp+0x18]` @ 0x5F469 → store to `task+0x74` @ 0x5F47A — there is no `[ctx+0x9c]`
+multiply; a prior pass claiming one was wrong and nothing citing it stands), and anchors at `task+0x78/+0x7C`
+from the actor's own X/Z (@ 0x5F4C6/0x5F4DB). The update (`0x5F540..0x5F657`) decrements remaining by clock dt
+(global `0x1047BFA8`, field `+0xEB0` @ 0x5F620) and compares the anchor componentwise vs `.rdata 1.0f`
+(0x5F5AA / 0x5F60F); teardown clears the suppression bit (`and ecx, 0xFFFFFFFD` @ 0x5F68B) **[V]**.
 
 ### 10.2 Byte cross-checks I ran against the W-pass look-at claims **[V]**
 
