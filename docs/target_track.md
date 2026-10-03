@@ -56,13 +56,25 @@ in this state machine; see §9 for the corrected relevance and the next dig.
 | 0xA6D19 | control fn 0xA65CB, parallel-move branch (free-run off **or** both mount siblings fail) |
 | 0xA76D0 | the auto-run steering fn (~0xA7600..0xA7795), after its own auto-run re-aim |
 
-The single stack argument is `&dir` (the 3f movement vector in the caller's frame).
-The function also reads the **3rd word of the call frame** — four words past the
-documented argument — as a pointer to a 2-float pair (called `axes` below). Both
-call sites supply it implicitly through their own frames (a shared-frame compiler
-convention; in the control-fn call it lands on a slot adjacent to the M1 analog
-axes). The exact pointer value at the control-fn frame is not fully tracked —
-see open items.
+**Q11 resolved — there is no second/hidden argument [V].** ParallelMoveTarget
+takes the single documented stack argument `&dir` (the caller's 3f movement
+vector; `ret 4`). The pointer earlier docs called `axes` (`mov ebp, [esp+0x9C]`,
+RVA 0xA7C69 and 0xA7DFE) resolves — by full esp-fixpoint over this function with
+callee-cleanup widths resolved through the vtable tables — to **entry-relative
+slot +4 = arg-1 itself**: prologue lands esp_c at −0x90 (sub 0x88 + push esi/edi),
+and both branches execute `push ebx; push ebp` (0xA7BBB/0xA7BBC) before the load,
+making esp_c −0x98, so [esp+0x9C] = E_c + 4. The two loads are also the ONLY
+EBP-defining instructions in the whole function. `ebp` therefore aliases
+`&dir`: the three "axes" floats {+0,+4,+8} **are the movement vector**
+(the gate reads dir.x/dir.z against 0, 0xA7C74..0xA7C92; free path rotates by
+−dir.z/len, 0xA7E09..0xA7E10; nudge scales along n by dir.x, 0xA7E71..0xA7EAA;
+`EaseInputAxes` eases dir in place). Callers fully own dir before the call —
+auto-run site writes its basis into the dir local immediately pre-call
+(`lea eax,[esp+0x18]`, stores at [esp+0x1C]=…/[esp+0x24]=1.0f, 0xA76A7..0xA76CC).
+*Retractions superseded by this pass:* (a) the original §2 "3rd word of the call
+frame / shared-frame convention" story; (b) the intermediate revision's "3-float
+vector slot" correction — both were artifacts of mis-mapping branch-local esp
+drift. Solver + producer trace: `C:/tmp/d1_pass/frame_final.py` (output logged in session).
 
 ### 2.1 Reconstruction (open-source form)
 
@@ -70,8 +82,10 @@ see open items.
 // FFXiMain.dll retail-2026-09 (TDS 0x6A995428)
 // RVA 0xA7B80..0xA7FE3 — ParallelMoveTarget
 // thiscall: this = ecx (player actor)
-// args:     [stack 1] = &dir   (3f movement vector, caller frame)
-//           [stack 3] = &axes  (2f input pair, caller frame — see note above)
+// args:     [stack 1] = &dir   (the only argument; 3f movement vector, caller frame)
+// NOTE (frame-solver pass): every `axes` below means *dir through the re-loaded
+// arg pointer* (ebp = &dir, see §2 resolution) — gate/rotate/nudge/ease all act on
+// the caller's movement vector itself.
 // ret 4.
 
 // Frame slots used (offsets from this function's esp after prologue):
@@ -586,4 +600,9 @@ RVA 0x...`.
 - 0x95680/0x956A0 gate bodies (mount siblings, T5).
 - vtbl +0x1B0 getter body (state-3 actor rate, T3).
 - 0xAAEF0 self-query contribution to `dist_sum` (T6).
-- The control-fn `axes` pointer value at its [esp+4]-ish frame slot (T1 note).
+- ~~The control-fn `axes` pointer value at its [esp+4]-ish frame slot~~ — **CLOSED
+  definitively (frame-solver pass):** there is no separate axes input; the `ebp` loads are
+  arg-1 (`&dir`) re-read after branch-local pushes (§2 revision). Every consumer operates on
+  the caller-owned movement vector. The whole-function esp fixpoint converged with all indirect
+  vtable-call cleanup widths resolved via the class-vtable tables (slots +0x198/+0x1a0/+0x1bc/
+  +0x1c0/+0x210/+0x330/+0x340 = plain `ret`; +0x344 = `ret 4`).
