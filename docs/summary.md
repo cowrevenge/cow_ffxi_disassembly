@@ -775,7 +775,11 @@ times — @RVA 0xA6988 pre-integration on the steer/ease branch (paired with the
 angle survives a locked-animation tick. kuluu's fixed chain has this precedence already → no ordering change.
 
 **Standing research-open queue (order set by Shane)** — the first item (`[interp+0x9C]` producers) closed same
-day [V] (§14.5); still open: fn **0x20446**.
+day [V] (§14.5), and the queue is now empty — the last item, fn **0x20446**, closed as a malformed question:
+`0x20446` is not a function (the only branch into it is a rel8 `je` @RVA 0x20438 that a rel32-only scan misses),
+and RVA 0x1EE60..0x20B9B — `UpdatePlayerFollowingCamera`'s own body — contains no `ret` and no padding between
+0x1EE5A and 0x20B9B, so the arm store at 0x20769 has a verified path. Method rule added to [movement.md](movement.md):
+reachability needs rel8 branches + a ret/padding boundary walk before anyone says "no callers".
 Also closed [V]: the "follow-actor slot" item — its framing was wrong. `0x10487F74` is a *static object instance*
 (all 26 refs are `mov ecx, OFFSET …`; nothing loads/stores through it), one of a family at
 `0x10487F58/+64/+74`, and its getter (RVA 0x81550) resolves **{u32 index into the global entity table 0x10480AF0;

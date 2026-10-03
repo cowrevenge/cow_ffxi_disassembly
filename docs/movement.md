@@ -690,13 +690,29 @@ the 0x1047D600 object lookup via 0x81550 is non-null it also does
 0x11FF4; `[0x10487F81]` (M6's auto-run flag) is written by fn
 **sub_0A6070(byte)** (`mov al,[esp+4]; mov [0x10487F81],al`) and init 0x11FFA.
 
-*arm-20 reachability [I]:* no E8 caller to seed 0x20446 exists and no data
-pointer references any VA in the block; apparent calls into it from
-0x2013A/0x201BA/0x201E1 all land at **0x20773** — an instruction boundary that
-sits *after* the arm store at 0x20769, so the arm-20 store itself has no
-verified entry. Settling read: prologue-boundary walk of raw bytes
-0x204xx..0x207FF (int3/nop padding scan) to see whether the body containing
-0x20769 is a function at all.
+*arm-20 reachability — CLOSED [V] 2026-10-05, and the old question was
+malformed.* A boundary walk of raw bytes settles it: in RVA **0x1EE60..0x20B9B**
+there is not a single `ret` between 0x1EE5A and **0x20B9B**, and no padding run
+(≥ 4 int3 or ≥ 8 nop) anywhere in it, so this is one contiguous branch-only body
+whose prologue belongs to `UpdatePlayerFollowingCamera` (RVA 0x1EE60, M11). Branches
+from inside that routine enter the body directly — `je/jne` sites at RVA
+**0x1EE75, 0x1EE84, 0x1EEA4, 0x1EEB8** all target **0x20B93**, and deeper in,
+0x1F613 → 0x201E6 and 0x20001 → 0x201BF. Consequently:
+
+- **`0x20446` is not a function.** The sweep invented it as a "function with no callers"
+because the only branch to it — `je` at **0x20438** (bytes `74 0c`) — uses an 8-bit
+ displacement, which the usual rel32-only scan misses. Block entry is verified from that
+ site.
+- **The arm store at 0x20769 has a verified path**: it sits inside this same body, and the
+ three `jmp 0x10020773` sites (0x2013A / 0x201BA / 0x201E1) are the convergence tail *after*
+ it — they were read as "calls into" the arm and are just jumps to shared epilogue code.
+- Whole-image census backs it: zero absolute-pointer occurrences of `0x100204xx` exist
+ anywhere in the file (so no vtable/jump-table entry), consistent with "branch-only body,
+ never called" rather than "dead code".
+
+**Method note worth keeping:** a reachability conclusion needs rel8 branches (`7x`, `EB`,
+`E2/E3`) and a ret/padding boundary walk, not just E8-call + imm32 pointer scans; the two
+tools here report only those, which is what produced the phantom "no callers" result.
 
 Also verified in this pass: 0x311C2C = round-to-nearest int(float) (953 call
 sites); the GetAnalogKey fnB slots (0x122E20/0x123030/0x1232E0/0x123450) are
