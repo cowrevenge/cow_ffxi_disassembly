@@ -308,23 +308,12 @@ track the player.
 
 **M15 [local].** The Q/E turn keys drive **both** the camera and the body.
 
-Camera side — in the camera-manager per-frame update (the function containing
-0x1EF00..0x1F14A, sibling of `UpdatePlayerFollowingCamera`):
-
-```
-axis6 = GetAnalogKey(0x3F, 6)              ; 0x1EF4E, the signed turn axis
-tick  = call 0x14CF0                        ; frame scale
-cam+0x48 += tick * axis6 * 0.10666667      ; 0x1F0F2..0x1F147, rate @0x32A3E4
-```
-
-`cam+0x48` is read back in the same camera code (0x1E6E9, 0x1E7DF, 0x1E8AF),
-consistent with an azimuth accumulator behind the +0x24/+0x2C direction pair
-(M12). A second rotation path exists — `call 0x1EBB0(angle)` at 0x1F0ED,
-where 0x1EBB0 re-derives the bearing from eye(+0x44)/look-at(+0x50), adds the
-angle (0.027924445 rad/tick = 1.6° per tick, 0x32A3EC) and wraps to [-π, π] —
-but in this build its angle source is a slot that is zero-cleared before the
-key-hold multiplies (0x1EF30..0x1EFA1), so that path is degenerate (angle 0)
-and the cam+0x48 integration is the effective Q/E camera rotation.
+Camera side — **superseded in full by M30 (§10b)** on 2026-10-04. The block first
+written here read `cam+0x48` as an azimuth accumulator fed by the turn axis, and called
+the `call 0x1EBB0(angle)` rotator degenerate ("the angle slot is zero-cleared before the
+key-hold multiplies"). Both readings came from mis-tracking the esp frame across a pair of
+pushes: those slots are *overwritten* by the axis reads afterwards. `cam+0x48` is an
+eye-position component, and the rotator path is the live azimuth law — byte record in §10b.
 
 Body side — in the control function (0xA65CB), reached when free-run, no event
 sub-state, and the W/S axis >= 0:
@@ -400,6 +389,199 @@ virtual arrow-key actions**, which the M15/M19/M20 keyboard integration then
 consumes — one more reason kuluu should not model mouse and arrows as separate
 scales (gaps C3, C2).
 
+## 10b. The two aim axes and their laws (M30)
+
+**M30 [V].** Closes "the unit of `[cam+0x48]`" (§16) and re-draws the aim path end to end
+inside `UpdatePlayerFollowingCamera` **0x1EE60**. TDS 0x6A995428, read 2026-10-04.
+
+*Object identity.* Both call sites of 0x1EE60 (`0xA5EAC`, `0xA66D3`) do
+`call 0x15250; mov ecx,eax; call 0x1EE60`, so `this` is the rig returned by `GetCameraMng` =
+`[[0x104568FC]+0x50]` (M12), **not** the tick object at [0x104568FC]. That one register
+reaches every field below and both rotator calls — which is what the unswept 0x20FF0
+fragment could not settle.
+
+*Field geometry.* +0x44/+0x48/+0x4C and +0x50/+0x54/+0x58 are two world-space points (eye /
+look-at), as M12's table already said:
+
+- Rotator **0x1EBB0** (`ret 4`, one float argument): `dx=[+0x50]-[+0x44]` (0x1EBB6..),
+  `dz=[+0x58]-[+0x4C]` (0x1EBC0..); `fpatan` 0x1EBCE then `fadd arg` 0x1EBD0; wrapped against
+  +π (.rdata 0x329D30), a full turn (0x329D2C) and −π (0x329D28); magnitude via **0x27680**;
+  then **eye.x = lookat.x − d·cos θ** (`fcos` 0x1EC3F → `fstp [+0x44]`) and **eye.z =
+  lookat.z − d·sin θ** (`fsin` 0x1EC4F → `fstp [+0x4C]`). **The orbit never writes +0x48**, so
+  its argument is a signed radian azimuth delta.
+- Vector helpers pin the layout: **0x27120** = 3-float subtract (called at 0x1F05C on
+  &(+0x44),&(+0x50)); **0x27530** = dot product, `fsqrt` 0x1F076 → full 3D |eye−lookat|.
+  Whole-vector adds of the triple sit at 0x1E7D6/0x1E8A8/0x1E9A9.
+
+*Axis intake* (slots from a mechanical push/pop walk of the frame): `GetAnalogKey(action 6)`
+→ slot A (`fstp` 0x1EF53, zeroed 0x1EF30); `GetAnalogKey(action 7)` → slot B (`fstp`
+0x1EF60, zeroed 0x1EF38). Digital action **0x8B** multiplies A by −1.0 (.rdata 0x32A3F0) at
+0x1EF78..0x1EF82; **0x8C** does the same to B at 0x1EF97..0x1EFA1 — reverse partners of those
+two axes, not extra axes.
+
+*Law 1 — azimuth (slot A).* `tick(0x14CF0) × A × .rdata 0x32A3EC (0.027924445)`
+(0x1F01F..0x1F032); when free-run (`[[actor vt]+0x330]`) it is scaled by `.rdata 0x32A3E8
+(6.0) / max(|eye−lookat|, .rdata 0x329A18 (0.01))` (0x1F07B..0x1F09C), then handed to the
+rotator at **0x1F0ED** (second site **0x1F255**, re-anchor branch). ⇒ *constant tangential
+speed*: 60 × 0.027924445 × 6 = **10.053 world-units/s of arc**, i.e. ω = 10.053/dist rad/s.
+That `6.0` is the same literal as the focal-zoom step (M17), and this is XIClient's
+`angle = 6.0f / eyeToTargetDistance * angle`, now [V] in this build without needing [web].
+
+*Law 2 — eye height (slot B).* `[+0x48] += tick × B × .rdata 0x32A3E4 (0.10666667)`
+(0x1F0F2..**0x1F14A**) ⇒ **6.4 world-units/s**, distance-independent: retail tilts by moving
+the eye's world Y at fixed XZ offset, exactly what kuluu's `ChaseCamera` pitch comment
+asserted from XIClient.
+
+*Shared gates.* While hold-flag **[0x10456D7C] > 0** each contribution is forced to zero
+(azimuth 0x1F0B0..0x1F0C5 and 0x1F218, height 0x1F113..0x1F128). When an axis is live and a
+suppression predicate fails, countdown **[0x10456D74]** arms to **10** frames (M29 units) at
+0x1F0E0 / 0x1F141 / 0x1F2AD. Other writers of +0x48: the vector adds above, and an
+anchor-height re-centring `[+0x48] += ([[actor vt]+0x1BC](…).y − [0x10456DA0])` at
+0x1F285..0x1F29D.
+*Input accessor correction (the "device tables" read).* **0x123970** (*GetAnalogKey*) is **not
+device-indexed**: its second argument is an **action id**. Gate = `word[0x1036CF60 +
+action*2]` ANDed with the active-device mask [0x1036E3A0] (returns 0.0 when unclaimed);
+accessors are a per-action pair at `.data 0x1036D0D8 + action*8` = (+0 raw, +4 composite). When
+both exist each runs and the larger magnitude wins (`abs` via ×−1.0 .rdata 0x32A3F0 at
+0x123A37/0x123A4C, `fcompp` 0x123A56, `and eax,0x4100`, tail-call to the winner at
+0x123A61/0x123A67). So "device 0x3E {0x8B,0x96}" and "device 0x3F {0x4F,0x50}" from earlier
+notes are **action ids**: 0x8B→0x10122E00, 0x8C→0x10122DF0, 0x96→0x10122E10 (raw only);
+0x4F/0x50 → composite 0x101230B0. Actions 4..7 own raw axis getters at
+0x120C10/0x120C40/0x120C70/0x120CA0, each `(byte[[0x104E1D44]+0x252/0x253/0x250/0x251] − 0x80)
+× .rdata 0x32A778 (1/128)` — **joystick axis bytes**, so a full pad deflection is ±127/128;
+kuluu's old "keyboard analog axis reads (key−0x80)/128, fnA at 0x120C70" line was that pad
+getter mislabelled. Action getters dispatch on the configured device: fn **0x122E30** switches
+on `byte[[0x104E1D4C]+0x4d]` (mode 4 → tail-calls the mouse normalized-offset accessors
+0x125FE0/0x126100 of M21/M23; mode 5 → gate fn 0x25E040 plus a `call 0x124110` context check
+with action−0x47 in [0,0xB]).
+
+*Still [I] — physical key identity and magnitude.* Which keys drive actions 6/7 (and 0x8B/0x8C),
+and how much one held key contributes to the axis value. Settling read named: the keyboard
+branch of fn 0x122E30's mode dispatch plus the binding table behind `byte[[0x104E1D4C]+0x4d]`.
+kuluu ships both laws with a digital ±1 axis and no extra tuning factor
+(`Cow_Kuluu_ffxi-engine d232f504`); if play-test says the camera is too fast, that read is where
+to look — not another constant.
+
+*x87 flag-decoding note.* For `fcomp c; fnstsw ax`, mask **AH 0x41** (EAX bits 8 and 14) is C3|C0
+and non-zero ⇔ NOT(st(0) > c); that is the ±π wrap guard at 0x1EBD8, matching an independent
+read of the idiom
+([stack overflow](https://stackoverflow.com/questions/31759551/assembly-converting-to-if-statement-using-two-fld-fcomp-fnssw-and-test-41h)).
+The `test ah,5` / `test ah,0x44` variants at 0x1F086/0x1F0DB are decoded here only from forced
+context (a NaN-guarded floor under a divisor); an authoritative bit map for those two masks is
+still open — settling read = Intel SDM FCOM/FNSTSW condition codes. Nothing in kuluu depends on
+either polarity: the 0.01 floor cannot bind at a real rig radius.
+
+*Intake and law sites, at the byte level (same pass; slots are canonical frame offsets from a mechanical push/pop
+walk of `UpdatePlayerFollowingCamera`, because raw `[esp+…]` displacements shift under pending pushes).* Both axis
+slots are **cleared then conditionally filled** in the same block — clearing them is what M19 read as "zero-cleared
+slots", and they are the slots each law later multiplies:
+
+    1ef30  c7 44 24 1c 00 00 00 00   mov dword [esp+0x1c], 0          ; slot S-0x1d8 (azimuth)
+    1ef38  c7 44 24 20 00 00 00 00   mov dword [esp+0x20], 0          ; slot S-0x1d4 (height)
+    1ef4e  e8 1d 4a 10 00            call 0x123970                     ; GetAnalogKey(_, 6)
+    1ef53  d9 5c 24 24               fstp dword [esp+0x24]             ; -> S-0x1d8 (delta -508: same slot as 1ef30)
+    1ef5b  e8 10 4a 10 00            call 0x123970                     ; GetAnalogKey(_, 7)
+    1ef60  d9 5c 24 30               fstp dword [esp+0x30]             ; -> S-0x1d4 (delta -516: same slot as 1ef38)
+    1f01f  e8 cc 5c ff ff            call 0x14cf0                      ; tick (M29)
+    1f024  d8 4c 24 20               fmul dword [esp+0x20]             ; × S-0x1d8 = the action-6 axis (delta -504)
+    1f02c  d8 0d ec a3 32 10         fmul dword [0x1032a3ec]           ; × 0.027924445
+    1f0ed  e8 be fa ff ff            call 0x1ebb0                      ; rotator, ret 4 (one float arg)
+    1f0f2  e8 f9 5b ff ff            call 0x14cf0                      ; tick
+    1f0f7  d8 4c 24 24               fmul dword [esp+0x24]             ; × S-0x1d4 = the action-7 axis (delta -504)
+    1f0ff  d8 0d e4 a3 32 10         fmul dword [0x1032a3e4]           ; × 0.10666667
+    1f147  d8 47 48                  fadd dword [edi+0x48]             ; accumulate into the rig's eye.y
+    1f14a  d9 5f 48                  fstp dword [edi+0x48]
+
+*Intake gates.* The two reads are skipped only when **both** `call 0x158AA0` (true if action 0x76 *or* 0x77 is
+pressed — `push 0x76/0x77; push 0x3f; call 0x123A70`) and byte `[input+0x22]`, copied to the frame at 0x1EEFA, are
+non-zero. A held action **0x8B** negates the azimuth slot and **0x8C** the height slot, through a one-argument
+predicate `call 0x193850` (`mov ecx,[0x106626cc] … jmp/jne`, not GetAnalogKey) — so reverse is a *key state* riding on
+an analog axis. A third overwrite exists at 0x1EFFD..0x1F003: when `CFsConf6Win` (0x25E050), `vt+0x330`, and spring
+mode `[0x10456db0]==0` all agree, the azimuth slot is replaced by `−(fn 0x25E170 − fn 0x25E100)`; both are composite
+accessors interrogating actions 6/7 (see §10c), so this is another device's aim value taking over the same slot.
+
+*Law 1 has two regimes — free-run only gets the distance normalisation.* The `× .rdata 0x32A3E8 (6.0)/max(|eye−lookat|,
+0.01)` scaling sits inside `call [eax+0x330]; test al; je` (0x1F036..0x1F09C): when the manager is **not** free-run the
+whole block is skipped, so ω = 60 × axis × 0.027924445 = **1.675 rad/s at full deflection regardless of rig radius**,
+and the tangential speed grows with distance instead of staying constant. Which retail states make `vt+0x330` true is
+open (§16) — named settling read, not a guess.
+
+*Rotator radius is planar.* `0x1EBB0` computes d with `call 0x27680(dx, dz)` (0x1EC1E) on the **XZ** pair and floors it
+at `1.0f` (`[0x1032961c]`, 0x1EC35), so eye placement uses planar distance while the caller's normalisation used the
+full 3D norm — a real difference at steep pitch, small in magnitude.
+
+## 10c. The action table behind the aim axes (M31)
+
+**M31 [V].** Closes §16's "GetAnalogKey full decode", kills the phantom *device* column, and names where
+the M30 axis values actually come from. TDS 0x6A995428, read 2026-10-04. Every RVA below is a `.text` RVA;
+table addresses are VAs.
+
+*Argument semantics.* `GetAnalogKey` **0x123970** opens `push ecx / mov eax,[esp+0xc]` (`51 8b 44 24 0c`) — its
+action id is the **second** argument, the one callers pass as `push 6; push 0x3f`. The first argument (always
+`0x3F` in every caller seen) is never read on this path: **"device 0x3F" in M1/M2/M15/M16 was a placeholder**, and
+those rows' "device 0x3E/0x3F action/button" phrasing should be read as *action id*. What gates an action is the
+per-action **device bitmask** word at `.data 0x1036CF60 + action*2`:
+
+    12397e  66 8b 0c 45 60 cf 36 10   mov cx, word [eax*2 + 0x1036cf60]
+    123987  85 d1                     test ecx, edx          ; edx = [0x1036e3a0], active-device mask (static 0xffff)
+    123989  75 0a                     jne 0x123995           ; unclaimed => return 0.0 ([0x103295d8])
+
+Census of the gate word and of the accessor pair `.data 0x1036D0D8 + action*8` (+0 raw, +4 composite), read out of
+`.data` (a second gate column therefore exists; `0xffff` = unconditional):
+
+| action | gate | raw getter | composite |
+|---|---|---|---|
+| 4 / 5 (move axes) | 0x0008 | 0x120C10 / 0x120C40 | 0x122E20 / 0x123030 |
+| **6** / **7** (aim axes) | 0x0010 | 0x120C70 / 0x120CA0 | 0x1232E0 / 0x123450 |
+| 8/9 → gate 0x0004, a/b → gate 0x0001 | share raw getters 0x120CD0 / 0x120D20 | | |
+| 0x79..0x7C | 0x0004 | same four as 4/5/6/7 | 0x122E20 / 0x123030 / 0x123060 / 0x123100 |
+| 0x4F / 0x50 (zoom keys, M17) | 0x0010 | none | both → 0x1230B0 |
+| 0x8B / 0x8C / 0x96 | 0x003E | 0x122E00 / 0x122DF0 / 0x122E10 | none |
+| 0x16..0x19 (M23's virtual presses) | 0x0002 / 0xffff / 0x0004 / 0x0004 | 0x122350 / 0x1222D0 / 0x122390 (last two share) | none |
+
+When only one accessor exists it is tail-jumped (`ff 64 24 08` / `ff 64 24 fc`, 0x123A07/0x123A18); when both exist
+each runs and the **larger magnitude** wins (abs via ×−1.0 `.rdata 0x32A3F0`, `fcompp` 0x123A56, `and eax,0x4100`).
+
+*Hard disable.* If `[[0x104dfd98]] && byte[[0x104dfd98]+0x4194]` then actions **4 and 5** return 0.0 outright
+(`cmp eax,4 / cmp eax,5` at 0x1239A9..0x1239B1) — a movement-input suppression flag in the game state object; which
+system sets +0x4194 is open (§16).
+
+*Actions 6/7 are logical camera axes 3/4.* The composites end `push 3; jmp/call 0x122E30` (action 6, 0x123342) and
+`push 4; call 0x122E30` (action 7, 0x1234B2). Dispatcher **0x122E30** switches on the configured input mode
+`byte[[0x104e1d4c]+0x4d]`, and every branch is a mouse/pad source —
+
+- axis 1 → `jmp 0x125FE0`, axis 2 → `jmp 0x126100` when mode == 4 (and `!CFsConf6Win`);
+- axis 3 → **0x126190**, axis 4 → **0x126200** when mode == 5 (and `!fn 0x25E040`) — cursor offset from the anchor,
+  `(Δpx) / (extent × .rdata 0x32A39C = 0.2)` clamped into ±1 (`1.0f` floor @0x1261D3, −1.0 ceiling @0x1261EA);
+- otherwise a jump table `.data 0x1012301c` [axis−1 ∈ 0..3] → stubs that return **stored floats** on the input
+  object: axis 1 `fld [ecx+0x94]`, axis 2 `fld [ecx+0x98]`, **axis 3 `fld [ecx+0x8C]`**, axis 4 `fld [ecx+0x90]`;
+- the raw getters of actions 6/7 (0x120C70 / 0x120CA0) read joystick axis bytes, `(byte[[0x104e1d44]+0x252/0x253] − 0x80) ×
+  .rdata 0x32A778 (1/128)`.
+*Those stored axis floats are cursor geometry, not key state.* `fld [ecx+0x8C]`/`[ecx+0x90]` have exactly two writers
+each in `.text`: **0x15773E** and **0x2C7E7A** (`fstp dword ptr [ecx+0x8c]`; `+0x90` at 0x157767 / 0x2C7E8C). The
+first is a two-int-argument tail (`ret 8`) computing, per axis,
+
+    157736  db 44 24 08             fild  dword [esp+8]         ; cursor x
+    15773a  d8 e1                   fsub  st(1)                 ; − 0.5·extent   ([0x10329a08] = 0.5 × word[0x106218b8])
+    15773c  d8 f1                   fdiv  st(1)                 ; ÷ 0.5·extent
+    15773e  d9 99 8c 00 00 00       fstp  dword [ecx+0x8c]      ; + 0x157751 sets byte [ecx+0x55] = 1
+
+i.e. a normalized **absolute cursor position** across the screen rect, already in ±1 about the centre — which is
+retail's other aim shape and precisely what kuluu's `mouse_aim_axis` (cursor vs window half-extent, saturating ±1)
+implements; mode 4's accessor instead saturates at **1/21** of the extent (`.rdata 0x32DF9C`) and mode 5's at **1/5**
+(`.rdata 0x32A39C`).
+
+*Consequence, stated plainly.* In this build there is **no keyboard source for actions 6/7**: every branch reachable
+from `GetAnalogKey` for those two ids resolves to mouse-cursor geometry or joystick axis bytes, and the only digital
+actions in the aim path are the reverse partners 0x8B/0x8C (sign flips) and M23's virtual presses 0x16..0x19. So when
+kuluu feeds these laws from held keys, it is feeding **retail's law through a kuluu input mapping** — label it that
+way in code; ±1 means "full deflection", which retail only reaches at or beyond the saturation distance (≈24 px of a
+1080-wide screen in mode 4). Any statement like "retail turns the camera at N rad/s with E held" is unsupported here.
+
+*Still open on this row.* Which input mode `byte[[0x104e1d4c]+0x4d]` a default client carries, and what
+`CFsConf6Win` (0x25E050) means beyond gating the mode-4/mode-5 split — settling reads named: the writer of that byte
+in `.text` (config load) and one bounded read of 0x25E040/0x25E050's bodies. Also who sets `byte[[0x104dfd98]+0x4194]`
+(the actions-4/5 disable above). None of these changes the laws; they decide which source a given player sees.
 ## 11. Camera zoom (focal), arrow yaw, spring-back, and the tick (M17–M20)
 
 **M17 [local].** Camera **zoom (focal length)** is integrated in the
@@ -937,9 +1119,9 @@ is in [target_track.md](target_track.md) §6.
 | 0x32A42C | 1e-6 | normalize guard (M3) |
 | 0x32A84C | 1/3 | walk band scale (M3; immediate 0x3EAAAAAB) |
 | 0x32C9A4 | 0.9 | run threshold (M3, data-referenced at 0xA7918) |
-| 0x32A3E4 | 0.10666667 | Q/E camera azimuth rate per tick (M15) |
-| 0x32A3EC | 0.027924445 | 1.6°/tick, degenerate 0x1EBB0 path (M15) |
-| 0x32A3F0 | -1.0 | sign flip, degenerate key-hold path (M15) |
+| 0x32A3E4 | 0.10666667 | **eye-height** aim axis per tick → cam.eye.y at 6.4 world-units/s (M30; M15 mislabelled it azimuth) |
+| 0x32A3EC | 0.027924445 | **azimuth** aim axis per tick, before the radius normalisation (M30) |
+| 0x32A3F0 | -1.0 | sign-flip of an aim axis when its reverse action is held (M30); also abs() in GetAnalogKey's getter choice |
 | 0x32A3D8 | 900.0 | zoom upper clamp, focal (M17) |
 | 0x32A3D4 | 242.0 | zoom lower clamp, focal (M17) |
 | 0x32A3DC | 350.0 | both-keys zoom snap target = focal default (M17) |
@@ -951,7 +1133,14 @@ is in [target_track.md](target_track.md) §6.
 | 0x10456960 | float | measured fps×scale, then overwritten with effective fps = 60/tick (M29) |
 | 0x10456964..73 + 0x10456974 | float[4] + int | the tick ring and its index (M29); summed 0x12C1E, ×0.25 |
 | 0x32A778 | 1/128 | keyboard analog axis scale (M20) |
-| 0x329A18 | 0.01 | re-anchor eye-move scale (M20) |
+| 0x329A18 | 0.01 | floor under the \|eye−lookat\| divisor of the orbit law (M30); also the re-anchor eye-move scale (M20) |
+| .data 0x1036CF60 | word per action id | active-device gate of an input action (M30) |
+| .data 0x1036D0D8 | fn-ptr pair per action id | input-action accessor table, raw / composite (M30) |
+| 0x104E1D44 | object | raw joystick axis bytes at +0x250..+0x253 (M30) |
+| 0x104E1D4C | object | configured input device per action (`byte[+0x4d]` mode), dispatched by fn 0x122E30 (M30) || .data 0x1012301C | jmp table [axis-1] | axis-id fallback of the mode dispatch -> stored floats `input+0x8C/0x90/0x94/0x98` (M31) |
+| 0x32A39C | 0.2 | aim-offset saturation extent, mode-5 camera accessors: +-1 at 1/5 of the screen rect (M31) |
+| 0x32DF9C | 1/21 | same in mode 4: +-1 at 1/21 of the screen rect (M21/M31) |
+| 0x329A08 | 0.5 | half-extent normalizing an absolute cursor position into +-1 (fn 0x157720, M31) |
 | 0x40466666 | 1.5 | re-anchor loop scale (M20) |
 | 0x32B15C | 0.3 | auto-run stop cross-y (M6) |
 | 0x32D430 | π/2 | facing clamp (mouse path) |
@@ -963,7 +1152,7 @@ is in [target_track.md](target_track.md) §6.
 
 | # | Tier | Statement | Evidence |
 |---|------|-----------|----------|
-| M1 | [local] | Control fn 0xA65CB; axes GetAnalogKey(0x3F,4/5) via 0x123970; input global 0x57876C | this doc §2 |
+| M1 | [local] | Control fn 0xA65CB; axes GetAnalogKey(0x3F,4/5) via 0x123970 (“corrected by M31”: `0x3F` is an unread placeholder arg; the numbers are action ids); input global 0x57876C | this doc §2 |
 | M2 | [local] | Mouse 0x4E1D4C +0xA8/+0xAC; steering 0xA77A0; CFsConf6Win 0x25E050 | §2 |
 | M3 | [local] | 0xA78D0 speed law: deadzone 0.05, run ≥ 1/3, field_594; no 0.9 in .text | §3 |
 | M4 | [local] | dir = {−key2·speed, 0, key1·speed}; dt via 0x14CF0, scale 0x272B0 | §2 |
@@ -977,16 +1166,18 @@ is in [target_track.md](target_track.md) §6.
 | M12 | [local] | Manager: dir +0x24/+0x2C, eye +0x44, lookat +0x50; getter 0x15250 two-level | §11 |
 | M13 | [local] | 0xA7933 is M3's 1/3 block; the cam+0x24 fpatan fn is 0xA79A0 (handoff conflation) | §11 |
 | M14 | [local] | Live position ent+0xD4/+0xD8/+0xDC; contact fields +0x5A0/+0x5AC/+0x5B0 | §7 |
-| M15 | [local] | Q/E turn keys rotate camera (cam+0x48 += tick·axis6·0.10666667, 0x1F0F2..0x1F147) and body (heading re-assign + SetDir 0x1E2F0, 0xA68D2..0xA6998) | §10 |
-| M16 | [local] | Device 0x3F actions: 4=W/S, 5=A/D (inverted), 6/7=Q/E pair; discrete 0xA9=Q, 0xAA=E | §10 |
+| M15 | [local] | Q/E turn keys rotate camera (cam+0x48 += tick·axis6·0.10666667, 0x1F0F2..0x1F147) and body (heading re-assign + SetDir 0x1E2F0, 0xA68D2..0xA6998) (“superseded in full by M30 §10b”: the `cam+0x48 += tick*axis6*0.10666667` site is the **eye-height** law driven by action 7; azimuth is action 6 at 0.027924445 through rotator 0x1EBB0, and `[cam+0x48]` is eye.y, not an accumulator)§10 |
+| M16 | [local] | Actions 4=W/S, 5=A/D (inverted), 6/7=the camera aim pair; discrete 0xA9=Q, 0xAA=E (“corrected by M31”: these are action ids, there is no device column) | §10 |
 | M17 | [local] | Zoom/focal: ±tick·6.0 (0x32A3E8), clamps 900.0/242.0 (0x32A3D8/0x32A3D4); both keys snap to 350.0 via byte 0x10456D84; wheel same path; store 0x15290→cam+0x2F8 (old M17 "pitch 23/10/15" was a XIClient leak — §11) | §11 |
 | M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; stored ref = axis·π/2·turn — the "underflow" claim is retracted (correction §11) | §11 |
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
 | M20 | [local] | ~~Tick = seconds (write site indirect)~~ — the tick is **elapsed in 1/60 s units, integer-valued** (M29 supersedes; the getter and the 1/128 axis census stand); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); state block 0x10456D70..0x10456DB4 | §11 |
 | M29 | [V] | The frame tick, end to end: object `[0x104568FC]` (0x33C bytes, ctor 0x10700 — `+0x28` tick 1.0f, `+0x2C` -1.0f, `+0x30` divisor 2, `+0x34/38/3C` 0); clock sub-object `[obj+0x1C]` (vptr 0x1032A118; vt+0x20 advance / +0x24 fps=1000/max-elapsed-int / +0x30 scale) on `timeGetTime`; writer = frame-loop tail 0x12A31 (EndScene/Present then Sleep(1)+pause cap spin, ring mean ×0.25 → round → floor at divisor → clamp 20.0, effective fps = 60/tick); **unit = integer count of 1/60 s**, Σ tick ≈ 60 per second whatever the cap; countdowns consume whole frames (0x1EEFE..0x1EF18) | §11c |
+| M30 | [V] | The two aim axes of `UpdatePlayerFollowingCamera`: **action 6 -> azimuth delta handed to rotator 0x1EBB0** (`tick x axis x .rdata 0x32A3EC 0.027924445`, scaled by `6/max(dist,0.01)` only while the manager is free-run; a flat **1.675 rad/s** at full deflection otherwise), **action 7 -> `cam.eye.y += tick x axis x .rdata 0x32A3E4 0.10666667` = 6.4 world-units/s**. `[cam+0x48]` is eye.y, not an azimuth accumulator; reverse partners 0x8B/0x8C are sign flips riding those axes; hold-flag [D7C] zeroes both contributions and countdown [D74] arms to 10 frames | §10b |
+| M31 | [V] | The action table behind them: `GetAnalogKey` 0x123970 takes its **action id as arg-2** (arg-1 `0x3F` is never read), gate = `.data 0x1036CF60[action*2]` device bitmask AND `[0x1036E3A0]`, accessors `.data 0x1036D0D8+action*8` (raw/composite, larger magnitude wins, tail-jump when one is null); actions **4/5 hard-return 0** when `byte[[0x104DFD98]+0x4194]`; actions 6/7 = logical camera axes 3/4 -> mode dispatch fn 0x122E30 on `byte[[0x104E1D4C]+0x4d]` -> **mouse-cursor geometry only** (saturation at 1/5 (.rdata 0x32A39C) or 1/21 (.rdata 0x32DF9C) of the screen rect) **or joystick axis bytes x 1/128; no keyboard key can drive them**; stored axes `input+0x8C/+0x90` are normalized absolute cursor positions (writers 0x15773E / 0x2C7E7A, `.rdata 0x329A08` = 0.5) | §10c |
 | M21 | [local] | Mouse input object `[0x4E1D4C]`: anchor/cursor fields, ±1 edge-saturated normalized offsets (1/21 scale @0x32DF9C), screen rect `[0x106218B4..BA]`; position-based aim, **no rad/px sensitivity** | §10a |
 | M22 | [local] | Steering 0xA77A0: cursor angle quantized to 16 compass sectors (round&0xF), cos/sin+sector out into walker axes | §10a |
-| M23 | [local] | Mouse-aim dispatcher seed 0x125360 (device 0x3E buttons {8B,96}): θ=fpatan−π/2 state globals 0x1036E5F4/634 → virtual presses 0x16–0x19 with imul rate ramp; feeds the M15/M20 keyboard integration | §10a |
+| M23 | [local] | Mouse-aim dispatcher seed 0x125360 (actions {0x8B,0x96} — the earlier “device 0x3E buttons” reading is wrong (M31: those are action ids)): θ=fpatan−π/2 state globals 0x1036E5F4/634 → virtual presses 0x16–0x19 with imul rate ramp; feeds the M15/M20 keyboard integration | §10a |
 | M24 | [V] | Camera manager lifecycle: outer 0x33C bytes ctor 0x10700 vptr 0x10329C14, slot +0x50 installed only via sub_151A0 (from thunk 0x1E48A; controller global [0x10456D6C]); teardown sub_1E5B0 (§11b) | §11b |
 | M25 | [V] | fn 0x1EE60 is a manager method (callers A5EAC/A66D3 `via getter`); its vt+0x330 = IsFreeRun on the manager class; entry reads bypass byte [outer+9] and gates actor type via descriptors 0x10330EBC/0x10330684 | §11b |
 | M26 | [V] | Countdown [D7C] decrements ONLY inside the round(tick) stall loop (0xFA44 gate) — never ticks during normal play; arm-8 sub_21110 walker-only under toggle [0x10487F80]; spring terminates via release (mode=0), not expiry | §11b |
@@ -1020,13 +1211,15 @@ is in [target_track.md](target_track.md) §6.
 
 ## 16. Open items
 
-- 0x123970 (GetAnalogKey) full decode — device 0x3F actions 4/5/6/7 are mapped
-  (M16); other actions and the 0x26/0x79/0x7C/0x83 devices remain.
+- ~~0x123970 (GetAnalogKey) full decode~~ — **closed by M31 (§10c)**: arg-2 is the action id, the gate word `.data 0x1036CF60[action*2]` is a device bitmask and there is no device argument. Actions 8b/9a/b/c, 0x79..0x7C, 0x4F/0x50 and 0x16..0x19 are now in the census table; the remaining un-censused ids are unread (they gate nothing in movement.md).
+- Which input mode `byte[[0x104E1D4C]+0x4d]` a default-configured client carries, and what `CFsConf6Win` (0x25E050)/fn 0x25E040 mean beyond gating the mode-4/mode-5 split. Settling reads: the writer of that byte (config load path) and one bounded read of both bodies. Matters only for which *source* a player sees (M31).
+- Who sets `byte[[0x104DFD98]+0x4194]` — the flag that makes actions 4/5 return 0.0 unconditionally (M31). Settling read: writes of `+0x4194` on that object.
+- Which states make the camera manager's own `vt+0x330` true, i.e. whether retail applies the `6/max(dist,.01)` azimuth normalisation right now (M30: only while free-run; otherwise a flat 1.675 rad/s at full deflection). Settling read: locate that vtable slot's body through the manager constructor's slot writes.
 - The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
 - 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
 - ~~The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.~~ — **closed 2026-10-03** by M29 (§11c): the writer is the frame-loop tail at 0x12A31, and it keeps the object in `esi`, which is why every global-load hunt missed it.
-- Unit of `[cam+0x48]` (the accumulated azimuth that Q/E and mouse aim integrate, M15/M29): the per-frame accumulation at 0x1F147 is `tick × axis × 0.10666667`, which sums to ≈6.4/s at full deflection — too fast for radians, so its consumer (the fsin/fcos or a π/180 multiply) has to be read before the aim rate can be stated in degrees. Next named read.
+- ~~Unit of `[cam+0x48]`~~ — **closed by M30 (§10b)**: it is eye.y, not an azimuth accumulator, and the `tick x axis x 0.10666667` accumulation at 0x1F0F2..0x1F14A is the **eye-height** law (action 7), whose unit is world units (6.4/s, distance-independent). The azimuth lives in rotator 0x1EBB0's signed radian delta.
 - ~~Spring-back reference-angle expression (M18)~~ — **closed 2026-10-04**: no
   underflow; stream-order decode in M18's correction.
 - Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).
