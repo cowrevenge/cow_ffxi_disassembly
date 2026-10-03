@@ -764,6 +764,18 @@ vtable `0x1C0`), and the `actor+0x620` facing-site bands — those sites **only 
 component 1 of a second angle set (`+0x61C..+0x628`) whose consuming method (0xC817A, virtual) is still
 unresolved. Remaining named read in this region: producers of `[interp+0x9C]`.
 
+**Closed 2026-10-05 [V] — gaps row D3, per-frame facing order (M27,**
+[movement.md](movement.md) **§8a):** the local-player routine 0xA65CB..0xA70AB writes heading three
+times — @RVA 0xA6988 pre-integration on the steer/ease branch (paired with the M18 spring setter), and
+@RVA 0xA705B / 0xA709D **after** `*pos += dir`, computed from that same travel vector, immediately before
+`ret`. When not free-run or not moving it writes no facing at all, which is how an authored drive-task
+angle survives a locked-animation tick. kuluu's fixed chain has this precedence already → no ordering change.
+
+**Standing research-open queue (order set by Shane):** producers of `[interp+0x9C]`; the follow-actor slot
+global **`[0x10487F74]`** (guarded by `mov ecx,[0x10487f74]; call 0x10081550; jne` @RVA 0xA7373 in the
+sibling heading writers, and neighbours `[0x10487F6C]`, `[0x10487F81/88/89]` seen in the facing fn); the
+`0x85240 / 0x85270` candidate-iteration semantics from M14; and fn **0x20446**.
+
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
 decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,
 movement.md §11 correction); today's whole-file E8 scan re-verified M18's caller census byte-exact

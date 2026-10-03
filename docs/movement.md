@@ -183,6 +183,55 @@ same +0xD4 triple.
 The body always faces the direction of travel (or the camera-rotated input while
 turning) — the camera never drags the facing.
 
+## 8a. Per-frame order of the facing update (M27) — closes gaps row D3
+
+**M27 [local].** Where the facing decision sits inside retail's per-frame local-player
+update, re-read from raw bytes 2026-10-05 to settle whether kuluu's fixed chain order is right.
+
+The routine is **0xA65CB..0xA70AB**, ending `ret 4` (`c2 04 00`) at 0xA70AB; `this` = `esi`,
+no direct callers (vtable-dispatched). Heading field = **actor+0xE8**; the direction triple is
+**+0xE4 / +0xEC / +0xF0**. The linear sweep splits this body at every `ret`, so its heuristic
+bound for the opening instruction (`func 0xA65CB` → `..0xA6817`) is wrong in length only — the
+region was walked in three pages and every address below is an instruction start.
+
+Order as the bytes give it, with each write's guard read from the same stream:
+
+| step | RVA | what happens (bytes) |
+|---|---|---|
+| 1. inputs | 0xA65D1 / 0xA6603 / 0xA6610 | key-state getter on `[0x1057876C]` (`call 0x10158aa0`), then the analog-axis getter `0x10123970` twice |
+| 2. steering | 0xA6630 / 0xA665A | mouse-steer enable gate `0x1025e050`, handler `HandleMouseSteering 0xA77A0` (M22) |
+| 3. rate | 0xA668A | speed/deadzone law `0xA78D0` (M3) |
+| 4. camera re-anchor | **0xA66D3** | `call 0x1001ee60` — M11, and it runs *before* any movement math |
+| 5. pre-integration facing write | 0xA6899..**0xA69A2** | gated on free-run `[eax+0x330]` true (@0xA689D), `[eax+0x340]` false (@0xA68AF), and byte-valued `f6 c4 44; jp` NaN/equal test on `[esp+0x10]` (@0xA68BD). Angle from getters **0x1025e170 / 0x1025e100** (@0xA68D2/@0xA68DB), sign-steered by byte **`[0x10487F81]`**, normalized with this layer's ±π triple (`[0x10329d30]/[0x10329d2c]/[0x10329d28]`, @0xA6944..0xA6966), then `mov [esi+0xe4]/[esi+0xec]/[esi+0xf0]` + **`fstp dword ptr [esi + 0xe8]` @0xA6988** (`d9 9e e8 00 00 00`) followed immediately by the M18 engage `call 0x1001e2f0` @0xA6998. Both arms converge on tail 0xA6A6F |
+| 6. position integration | **0xA6F1D → 0xA6F46** | contact gate `call 0xa8770`; if not blocked, `*pos += dir` (x @0xA6F31, y @0xA6F39, z @0xA6F43) — M9 |
+| 7. **final facing write** | 0xA6F4D..**0xA70AB** | gated again on free-run `[edx+0x330]` true and `[eax+0x340]` false. Single-axis shortcut: two NaN-safe zero tests on `dir.z [esp+0x20]` (@0xA6F6D) and `dir.x [esp+0x18]` (@0xA6F82), each `jp` straight to **0xA7072**. There `fld [esp+0x20]; fld [esp+0x18]; fpatan; fchs` → yaw = −atan2(dir.z, dir.x) stored at **0xA709D**; direction triple @0xA7088..0xA7094, `ret` @0xA70AB. Diagonal path: keyvec built by `0x10026e50` (@0xA6FD2), camera azimuth read as **`[cam+0x24]`, with `[cam+0x2C]` negated** (@0xA6FE6..0xA6FF6), rotated by `0x10027bd0` + `0x10028200`, atan2 at **0xA7035** stored at **0xA705B**, `ret` @0xA706F |
+
+**Heading-write census inside this body:** 0xA6988 (`fstp`), 0xA705B (`fstp`), 0xA709D (`fstp`);
+one read at 0xA6EA2 (`mov edx, [esi+0xe8]`). Writers beyond the `ret` belong to sibling routines
+(heuristic bounds fn 0xA7324..0xA73DD → **`fst [esi+0xe8]` @0xA73C9**; fn 0xA73DD..0xA7439 →
+**@0xA7431**), each entered through the same class dispatch and gated by the status chain
+(`0x84390` ∉ {edi,1,4,0x1c,0x1f}, then mount preds 0x84350/0x84370) plus free-run `[edx+0x330]`,
+with a follow-slot test `mov ecx, [0x10487f74]; call 0x10081550; jne` @0xA7373..0xA737F
+(that global is its own open research row — see summary §Where we are looking next).
+
+**M27 conclusions.**
+1. Retail's *authoritative* facing write is **post-integration and travel-derived**: when free-run
+   and moving, the last thing the routine does before returning is recompute yaw from the very
+   direction vector it just integrated (0xA705B / 0xA709D), so nothing can sneak a heading in after.
+2. When *not* free-run or not moving, the routine writes **no** facing at all on those paths —
+   which is how an authored drive-task angle survives a locked-animation tick (drivetask §13/§14).
+3. The one branch that writes heading early (step 5) also fires the M18 spring setter in the same
+   breath, so it is the steer/ease case, not a competing travel read.
+
+**kuluu.** No ordering change needed — confirmed by reading the tree, not the handoff. The fixed
+chain (`dispatch_movement_system → recover_self_ground_system → apply_self_prediction_system →
+stair_capture_system`, `kuluu/src/view_native/mod.rs` 825–835) decides facing and integrates the
+step in one system: authored base heading first (`authored_heading.unwrap_or(self_pos.heading)`,
+`input.rs` ~1570), travel re-aim over it, position written last. Same precedence as M27:
+authored survives when not travelling, travel wins on a moving tick. Heading has exactly one
+writer in kuluu's player path (plus `rendered_heading_rad` for remote ActorRotation,
+`scheduler_runtime.rs:2486`).
+
 ## 9. Camera follow (M11)
 
 **M11 [local].** `UpdatePlayerFollowingCamera` = **0x1EE60** on the camera manager.
