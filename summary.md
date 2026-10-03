@@ -762,7 +762,10 @@ duration fetcher's scale is interpreter field +0x9c (§14.2). Closed 2026-10-05 
 the producer that queues the pending pair (fn 0x5AF2C, script-context gated, heading Δ from the §13 record via
 vtable `0x1C0`), and the `actor+0x620` facing-site bands — those sites **only wrap-normalize**; `+0x620` is
 component 1 of a second angle set (`+0x61C..+0x628`) whose consuming method (0xC817A, virtual) is still
-unresolved. Remaining named read in this region: producers of `[interp+0x9C]`.
+unresolved. Named reads in this region are now closed: the interpreter operand-scale `ctx+0x9C` producers are read **[V]**
+([drivetask.md](docs/drivetask.md) §14.5 — default 1.0f @RVA 0x57425, parent-inherit gated on flag `[+0x142]`
+@RVA 0x5738D, and the only override **×0.7** @RVA 0x56CB5, applied when `[[owner+0xC]+0xC] ∉ {0xE,0xF}` and the
+signed word `[owner+0xC]+0x1C > 1` — authored durations run at 70 % there).
 
 **Closed 2026-10-05 [V] — gaps row D3, per-frame facing order (M27,**
 [movement.md](docs/movement.md) **§8a):** the local-player routine 0xA65CB..0xA70AB writes heading three
@@ -771,7 +774,8 @@ times — @RVA 0xA6988 pre-integration on the steer/ease branch (paired with the
 `ret`. When not free-run or not moving it writes no facing at all, which is how an authored drive-task
 angle survives a locked-animation tick. kuluu's fixed chain has this precedence already → no ordering change.
 
-**Standing research-open queue (order set by Shane):** producers of `[interp+0x9C]`; the follow-actor slot
+**Standing research-open queue (order set by Shane)** — the first item (`[interp+0x9C]` producers) closed same
+day [V] (§14.5); still open: the follow-actor slot
 global **`[0x10487F74]`** (guarded by `mov ecx,[0x10487f74]; call 0x10081550; jne` @RVA 0xA7373 in the
 sibling heading writers, and neighbours `[0x10487F6C]`, `[0x10487F81/88/89]` seen in the facing fn); the
 `0x85240 / 0x85270` candidate-iteration semantics from M14; and fn **0x20446**.

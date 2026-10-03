@@ -733,7 +733,7 @@ At fire (handler RVA 0x5AF2C..0x5B0C7):
   receives {script ctx, interpreter, duration float}. Flag: `call 0x100D5490(task, 1)`.
 - Duration comes from fetcher `0x1005E590`: `mov eax,[ecx+0x88]; movsx edx,word[record+6]; fild;
   fmul [interp+0x9C]` — **this closes §12's unresolved duration factor: it is the interpreter field
-  +0x9c** (producer still unread).
+  +0x9c** (producers now read in full — §14.5).
 - Gates: script ctx and target must both resolve (`0x62770`, `0x627D0`) or nothing is applied.
 - Position deltas between ctx and target are read through vtable slot byte **`+0x1BC`** — the position
   getter (its method at RVA 0xACAB0 copies a vec3 from it) — compared component-wise against **`0.1f`**
@@ -833,6 +833,47 @@ lands in composed facing is not, so porting it now would mean inventing kuluu's 
   consumer composes facing from that set (§14.3 last paragraph). `0x28` needs the element-list parameter
   semantics decoded further before it means anything here. Both now have schemas, so neither is an unknown
   carrier anymore.
-- §12's duration factor is closed as interpreter field +0x9c; reproducing retail durations exactly will
-  need that producer eventually.
+- §12's duration factor is closed as interpreter field +0x9c; its **producers are now read** — see §14.5.
+
+### 14.5 Producers of the interpreter operand scale `ctx+0x9C` (re-read byte-for-byte, 2026-10-05) **[V]**
+
+The last named read in this region. Field contract (from §5b): every authored **integer** operand fetched for a
+script stage is multiplied by the interpreter instance's float at `ctx+0x9C`, and `ctx+0x88` holds the current
+script record, so the whole fetch family (`fmul [ecx + 0x9c]` thunks at RVA **0x5E563 / 0x5E580 / 0x5E5A3 /
+0x5E5C0**, plus ~20 `fmul dword ptr [esi + 0x9c]` operand fetchers spread over RVA **0x57F1B..0x592FD**) scales
+authored frame counts/angles by one per-instance factor.
+
+There are exactly three writers of this field on that object, plus a flag that tracks whether an override exists:
+
+| # | RVA (store) | Containing routine | What it writes |
+|---|---|---|---|
+| 1 default | **0x57425** — `c7 86 9c 00 00 00 00 00 80 3f` = **1.0f** | fn **0x573E0..0x5749F**, the interpreter's field-reset/init routine (same routine stores `ctx+0x80 ← [arg+0x14]`, and reaches this store whenever its third argument is 0 or 1) | unit scale |
+| 2 inherit | **0x5738D** — `fld dword ptr [edi + 0x9c]` / `fstp dword ptr [esi + 0x9c]` | fn **0x57270..0x573AF** (ends `ret 4` @RVA 0x5739E) — the child-from-parent clone: byte `[edi+0x144]` is copied first, and this float copy runs **only when byte `[parent+0x142] ≠ 0`**, immediately followed by `mov byte ptr [esi + 0x142], 1` | a parent's override propagates to the child |
+| 3 override | **0x56CB5** — `c7 86 9c 00 00 00 33 33 33 3f` = **0.7f** | factory fn **0x56C70..0x56CD0** (ends `ret 0x10`; one of several near-identical scheduler factories in RVA 0x56B80..0x56D20) | the only non-unit scale found |
+
+Gate on #3, read instruction by instruction from 0x56C94:
+`test edi, edi; je skip` (an owner argument must exist), then `edi = [edi+0xC]`, `eax = [[owner+0xC]] … eax=[edi+0xC]`
+with `cmp eax, 0xE / je skip` and `cmp eax, 0xF / je skip` (a two-kind exclusion — semantics unread), then
+`mov ax,1; cmp word ptr [edi + 0x1c], ax; jle skip`, i.e. the signed WORD at `[owner+0xC]+0x1C` must be **> 1**.
+Only then does the scale drop to 0.7 and the flag `mov byte ptr [esi + 0x142], 1` get set (al is already 1 from
+`mov eax,1`). Reading it plainly: when the owning context is one of two excluded kinds, or its +0x1C counter is
+≤ 1, authored durations keep their unit scale; otherwise they run at **70 %**.
+
+Supporting facts:
+- Flag-byte reset routine fn **0x573B0..~0x573DF** zeroes `[ecx+0x140]`, `+0x141`, `+0x143`, `+0x144`, `+0x145`
+  and dword `[ecx+0x146]` — it deliberately **leaves the override flag `+0x142`** (and the float) alone.
+- A sibling factory variant beginning at RVA **0x56BB0** tests `[parent+0x142] == 0`, compares
+  `[parent+0x9c]` against the constant at `.rdata [0x1032961C]`, and only then derives a value from `[this+0x7c]`
+  (`fild qword ptr [esp+0xC]`) — unread semantics, recorded so a later pass does not mistake it for a producer.
+- **Excluded as same-offset different-class writes:** RVA **0x99FE1** (routine seeded at 0x99AE0) and
+  **0x9BB78** (seeded 0x9B550) store `[entity + 0x9C]` for entries indexed out of the global entity table
+  `0x10480AF0` (`mov ecx, dword ptr [eax*4 + 0x10480af0]`; first one is `fild word [esi+8] × [0x1032a378]`, the
+  second feeds a `call 0x8CD20`), and RVA **0x5E912** writes its own `+0x9C` beside fields +0x94/+0xa0..+0xac in a
+  layout with no script record at +0x88. None of them feed the fetchers.
+
+**Consequence for kuluu.** The ActorRotation duration law (§12) should carry this factor when it ever sees a
+non-zero mode byte: authored frames × `ctx scale`, defaulting to 1.0 (shipped records are all mode 0, where the
+duration is unused — so no behaviour change today). The ×0.7 gate needs an owning-context model kuluu does not
+have yet (`kind ∉ {14,15}` and a `+0x1C` counter > 1 on that owner), which is why it is recorded rather than
+ported.
 
