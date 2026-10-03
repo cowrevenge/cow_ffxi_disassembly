@@ -201,6 +201,59 @@ unlocated" framing in this section and in §C/§D is superseded by §E.
 
 ---
 
+## B-bis. The `actor+0xB2` visibility/flag WORD — full `.text` census (pass of 2026-10-05, for gap row A1)
+
+§B's look-point branch (`y −= 1.2f` when `target+0xB2 ≠ 0`) needs the field understood before it is
+ported. Census tool: `tools/mem_operand_census.py --disp 0xB2` over the cached full-text sweep —
+**105 hits across 53 functions, 41 writes**; every hit below re-read from raw bytes this pass.
+The base question first: at §B's site the base is the **target actor itself**, not its inner record:
+```
+0xd5c68  call dword ptr [eax + 0x1c4]   ; edi = target actor, attach point 3 (the look point)
+0xd5c7a  cmp word ptr [edi + 0xb2], 0   ; *** WORD test — bits at +0xB2 and +0xB3 both count ***
+0xd5c84  fsub dword ptr [0x1032a404]    ; −1.2f on Y when nonzero
+```
+The struct family is confirmed by its neighbours: XIClient `BaseActor.h` lays out `char field_B0; char field_B1;
+unsigned short field_B2; Resource::ResourceContainer** field_B4;` right after `SubActorStatus (+0xA4)` **[web]**,
+and DancingMad's pipeline map names slot 191 (`OcclusionClip`) as *"sets +0xB0/+0xB2 on failure"* **[web]** —
+corroborated by our bytes below (the occlusion query sites touch exactly that pair).
+
+**Constructor default:** `mov word ptr [esi + 0xb2], bx` @ **0x81c3a**, bx = 0 — inside the actor base
+constructor (adjacent stores zero +0x68/+0x70/+0xA0/… and fill ARGB grey `0x80808080` at +0x78/+0x7C).
+So every actor starts with the WORD clear **[V(me)]**.
+
+Bit-level writers (byte ops unless noted; all [V(me) this pass]):
+
+| bit | set sites | clear sites |
+|---|---|---|
+| 0x01 | re-init/class-swap path `or dl,1`+store @ **0xc6271/0xc62c9** inside fn entry **0xC5D60** (callers all store actor vtables first: 0xc532f/0xc55ef/0xc5779/0xc590f `mov [esi],0x10330f40`, and 0xd7261 stores `0x103313e8` — subtype swaps); helper @ **0xcbdbc** (`or dl,1; mov [ecx+0xb0],1; mov [ecx+0xb2],dl`) gated by `cmp word[ecx+0xb2] != 0` short-circuit @0xcbd98 and a float test on `[ecx+0x8c]`; **occlusion region** — right after `Occlusion_QueryScreenRect (0x6c280)` writes the +0x9F4 bucket cache: **0xcc6a5/0xcc6ae**, and again @ **0xcd029-cd032** (+0xB0=1 too); child-list pass **0xcbe3a/0xcbe43**; update-region clears/re-sets @ 0xac550, 0xc7cf4/0xc7cf9, 0xc7d22/0xc7d25 | sweep over the draw list head `[0x1047d578]` (iterates every actor): `if word[+0xb2]!=0 → and byte[+0xb2], ~1` @ **0x82d5e**; also 0xac555, 0xc7cf9, 0xc7d25 |
+| 0x04 | (none found — no writer sets bit 2 anywhere in `.text`; see note) | local-player-only pair keyed on the camera toggle `[0x10487f80]`: **0x842f1** (`and ~4` when toggle ≠ 0) and **0xa8ce3** (inside `sub_0A8CC0`, which *writes* the toggle byte then clears bit 2 when it turns off); both go through global object `[0x1047d600]` → lookup `0x81550` |
+| 0x10 | **0x1d4e57** (`or,0x10`) — in the menu/preview control region beside focal setter `call 0x152b0` (camera `[0x104568fc]+0x2f4` read at 0x1d4e9e) | **0x1d4e1b** (`and ~0x10`) same region, other arm |
+| 0x20 | **0xcd346** — gated on two actors' `[+0x13f]` low nibbles differing (after `call 0x87890`, `call 0x1cc4f0`) | **0xcd2fd** |
+| 0x40 | event/state-machine (switch on `[esi+0x1bc]`, actor at `[esi+0xa0]`): `or cl,0x40`+store @ **0x8b6a1/0x8b6a4** gated by flags `[esi+0x120]`/`[esi+0x128] bit 29` | same machine @ **0x8b9f5**; and the interaction handler @ **0x8c88f** (after `call 0xd5ef0(actor,0)` / `0xd60e0(actor,0,2)`, `[esi+0xee]==2/5` branches) |
+| 0x80 | tiny virtual setter pair: **0x85ac0** (`or byte [ecx+0xb2],0x80; ret 4`) | **0x85ab0** (`and byte [ecx+0xb2],0x7f; ret`) |
+
+Bit **0x08** is read but never written directly in `.text` — `test byte ptr [esi + 0xb2], 8` @ 0x85993/0x859d3
+(inside the actor-update helper at 0x857A4, which also does load/copy/stores of the whole byte around
+calls to sibling methods 0x856f0/0x85820/0x85620); **bit 0x02** likewise only read
+(`test …, 2` @ 0x57840 in scheduler-interpreter region, 0x85a53; `test byte[eax+0xb2],2` @ 0x857…).
+They are reachable only via whole-byte stores (the census' 16 `mov reg → mov [..+0xb2]` copy sites, e.g.
+the actor→actor clone copy @ **0xcb368-0xcb37f** and the event-state writes at 0x859ba–0x85a9b).
+Adjacent byte `[+0xB1]` is read with `test byte ptr [esi + 0xb3], 1` @ 0x85ad3 — so the WORD's high byte
+(+0xB3) has its own bit-0 consumer; D5C7A's WORD test therefore fires on that too.
+
+**Readers of record:** the §B look-point gate @ **0xD5C7A**; whole-word equality `cmp word[edi+0xb2], bx`
+@ 0x831e2; zero-tests in movement/interaction regions (0x7c01a, 0xc4a60, 0xc7d12, 0xcf060/0xcf106,
+0xd0880/d08b0, 0xcbd98 short-circuit); per-bit tests listed above.
+
+**Naming state.** What sets each bit is recorded above by *system region*: occlusion/staggered visibility
+(bit 0 — matches DancingMad slot-191 gloss **[web]**), class-swap re-init (bit 0), the camera-mode toggle
+global pair (bit 2, local player only), menu/preview focal control (bit 4), a two-actor `[+0x13f]` nibble
+comparison (bit 5, **semantics [I]** — settling read: trace what byte `[+0x13f]&0xf` is at 0xcd32e in the
+target-of-interest region), event state machines (bit 6), a virtual bit setter (**[I]** — settling read:
+locate the pair's vtable slot by scanning `.rdata` for `0x10085AB0`/`0x10085AC0`; not in
+tables_vtables.csv). The *aggregate* semantics the §B test uses is unambiguous regardless: **any flag set
+⇒ look point lowered 1.2**.
+
 ## C. Verification I ran myself this session **[V(me)]**
 
 | claim | check | result |
