@@ -582,7 +582,66 @@ way in code; ±1 means "full deflection", which retail only reaches at or beyond
 *Still open on this row.* Which input mode `byte[[0x104e1d4c]+0x4d]` a default client carries, and what
 `CFsConf6Win` (0x25E050) means beyond gating the mode-4/mode-5 split — settling reads named: the writer of that byte
 in `.text` (config load) and one bounded read of 0x25E040/0x25E050's bodies. Also who sets `byte[[0x104dfd98]+0x4194]`
-(the actions-4/5 disable above). None of these changes the laws; they decide which source a given player sees.
+(the actions-4/5 disable above). None of these changes the laws; they decide which source a given player sees.
+
+## 10d. Who owns the camera spring reference (M32) — play-test row P2 (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+The question P2 turned on: while locked on, does the chase camera compute its own orbit reference from the
+player→target bearing, or consume one the walker wrote? Only the second. Every byte below was read from the
+image this pass; it confirms M18's `[local]` shape and closes its ownership half.
+
+**One setter.** `0x1E2F0` is the only code in the image writing `[0x10456DB0]`/`[0x10456DB4]`:
+
+```
+0x1e2f0  a0 b06d4510       mov  al, [0x10456db0]      ; the mode byte, read before anything else
+0x1e2f7  8a442404         mov  al, [esp+4]            ; arg1 = new mode
+0x1e301  8a4c2408         mov  cl, [esp+8]            ; arg2
+0x1e309  c605b16d451000   mov  byte [0x10456db1], 0   ; a second mode flag, cleared on one branch only
+0x1e310  8b4c240c         mov  ecx, [esp+0xc]         ; arg3 = the reference angle (float)
+0x1e314  a2 b06d4510      mov  [0x10456db0], al
+0x1e319  890db46d4510     mov  [0x10456db4], ecx
+```
+
+**Seven call sites; six of them the walker.** A whole-`.text` `call` sweep (`e8` + rel32 == 0x1E2F0) returns
+exactly: `0x1E685`, then `0xA6998`, `0xA69AA`, `0xA6A1A`, `0xA6A46`, `0xA6A5D`, `0xA6C29` — the last six all
+inside the steer-branch region M1/M15 own. The 0xA6998 site shows the shape:
+
+```
+0xa697e  mov eax, [esp+0xc]      ; that frame's turn term (M18)
+...
+0xa698e  push eax                ; angle
+0xa698f  push ebp                ; mode argument pair
+0xa6990  push 1
+0xa6998  e85379f7ff    call 0x1e2f0
+```
+
+**One reader, in the camera, read-only.** `UpdatePlayerFollowingCamera` (M25's manager method) touches the
+global once:
+
+```
+0x1f171  84c0              test al, al               ; [0x10456db0] mode must be set…
+0x1f173  0f84e1000000      je   0x1f25a               ; …else no orbit this frame
+0x1f18e  d905b46d4510      fld  [0x10456db4]          ; the reference angle
+0x1f198  d9e0              fchs                       ; negated here, in the camera
+…       hypot distance vs .rdata 0x329A18 (0.01), floored at it
+0x1f1f8  d905e8a33210      fld  [0x1032a3e8]          ; 6.0
+0x1f1fe  d8f1              fdiv st(1)                 ; 6.0 / max(dist, 0.01)
+0x1f200  d84c2410          fmul [esp+0x10]            ; × the negated reference = orbit delta
+0x1f253  8bcf              mov  ecx, edi               ; camera
+0x1f255  e856f9ffff      call 0x1ebb0                  ; polar applier (M30's rotator)
+```
+
+Two predicates sit in front of it: `0x25E050` (`mov eax,[0x1066276c]; cmp dword [eax+0x44],2; ret`) — true
+only when that context object reports mode 2 — and the manager's virtual `vt+0x330` (M25: IsFreeRun), which
+short-circuits the distance recomputation and reuses the held value.
+
+**Consequences.** There is no camera-side lock-on orbit in this build. Nothing in `0x1EE60..0x20B9B` writes
+the reference, so an orbit while locked on can only be the walker storing its own heading-change term on
+each steering frame — which it does, because target-track feeds that same steer branch. A remake that freezes
+the reference at lock time, or that invents a bearing-derived one inside the camera, is wrong twice: it drops
+the only producer and adds a competing second one. Landed in kuluu as `8679a836` (walker re-aims while locked;
+the spring consumes the walker's own turn); gaps row P2.
+
 ## 11. Camera zoom (focal), arrow yaw, spring-back, and the tick (M17–M20)
 
 **M17 [local].** Camera **zoom (focal length)** is integrated in the
@@ -1182,7 +1241,8 @@ is in [target_track.md](target_track.md) §6.
 | M24 | [V] | Camera manager lifecycle: outer 0x33C bytes ctor 0x10700 vptr 0x10329C14, slot +0x50 installed only via sub_151A0 (from thunk 0x1E48A; controller global [0x10456D6C]); teardown sub_1E5B0 (§11b) | §11b |
 | M25 | [V] | fn 0x1EE60 is a manager method (callers A5EAC/A66D3 `via getter`); its vt+0x330 = IsFreeRun on the manager class; entry reads bypass byte [outer+9] and gates actor type via descriptors 0x10330EBC/0x10330684 | §11b |
 | M26 | [V] | Countdown [D7C] decrements ONLY inside the round(tick) stall loop (0xFA44 gate) — never ticks during normal play; arm-8 sub_21110 walker-only under toggle [0x10487F80]; spring terminates via release (mode=0), not expiry | §11b |
-
+
+| M32 | [V] | The spring reference is walker-owned and camera-read: one setter `0x1E2F0` writes `[0x10456DB0]` mode + `[0x10456DB4]` angle (stores at 0x1E314/0x1E319); its only seven callers are the reset `0x1E685` and six walker steer-branch sites (`0xA6998 A69AA A6A1A A6A46 A6A5D A6C29`); the camera reads it once (`fld/fchs` at `0x1F18E`, gate `[0x10456DB0]`, scaled `6.0/max(dist, .rdata 0x329A18)` into applier `0x1EBB0`) behind predicates `0x25E050` (`[[0x1066276C]+0x44]==2`) and `vt+0x330`. **No camera-side lock-on orbit exists** — while locked the reference is the walker’s own per-frame turn | §10d |
 ## 15. Kuluu conclusions (for the walker rework)
 
 - Kill auto-recenter-follow: the camera is free; it re-anchors only on input (M11).
