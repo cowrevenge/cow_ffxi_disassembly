@@ -407,7 +407,7 @@ Camera state block (all sites grep-verified):
 | 0x10456D70 | int; reset/cleared by the re-anchor |
 | 0x10456D74 | hold-off int (= 10) |
 | 0x10456D78 | azimuth reflection bound (float; also written at 0x20B81/0x2126F/0x218D7) |
-| 0x10456D7C | countdown float (-1.0 per re-anchor sub-step 0x1FA55; = 20.0 at 0x20769 in fn 0x20446, which has 0 direct callers; = 8.0 at 0x21147 in fn 0x210ae; zeroed 0x1FA82) |
+| 0x10456D7C | countdown float — **stall-loop-only decrement** (round(tick) gate, §11b); = 20.0 at 0x20769 (entry reachability open [I], §11b); = 8.0 at 0x21147 in **sub_21110** (walker-only callers 0xA5E41/0xA715E, armed under toggle [0x10487F80]); zeroed 0x1FA82 |
 | 0x10456D80 | = 60 counter (thunk 0x1E2B0, caller 0x18B4E1) |
 | 0x10456D84 | both-zoom-keys byte: next frame snaps focal to 350.0, then clears (M17) |
 | 0x10456D88 | 0/8 counter (key 0x51 sets 8 @0x201D7) |
@@ -416,6 +416,93 @@ Camera state block (all sites grep-verified):
 | 0x10456DA0 | azimuth feedback: cam+0x48 += ([GetPos()]+4 − [0x456DA0]) under vt+0x19C (fn 0x1EE60 at 0x1F289..0x1F2AD, hold-off=10 armed on the compare); whole-file disp32 census: only this read + reset-stores-0 (0x1E661) — stored value constant in this build |
 | 0x10456DB0 | spring-back mode byte (M18) |
 | 0x10456DB4 | spring-back reference angle (M18) |
+
+**§11b — C4 lifecycle addendum [V] (second full read of the event block).**
+
+*Camera object chain.* `g_pCamera` @0x104568FC is allocated by
+`push 0x33c; call new(0x10311BBB); mov ecx,eax; call ctor_10700; mov [g_pCamera],eax`
+(0x1569..0x158C). The ctor stores vptr **0x10329C14** at 0x10777 and leaves the
+manager slot `[outer+0x50]` = 0 (store site 0x10815, eax=0 path). The manager
+object returned by getter 0x15250 is installed only through `sub_151A0`
+(this=outer; arg): it calls **0x21C10(arg)**, copies the returned 64-byte
+matrix (16 dwords via rep movsd), and stores `[ebx+0x50] = ebp` — byte-exact
+at 0x151C7 (`89 6B 50`). Wrapper **sub_15100** (`mov eax,[esp+4];
+mov ecx,[g_pCamera]; push eax; call 0x151A0`) has exactly one caller: the
+thunk at **0x1E48A..0x1E4A4**, which first writes the controller global
+**[0x10456D6C]** and installs that. Teardown `sub_1E5B0` (a handler-array data
+pointer at VA 0x1032A380, inside the descriptor block whose class name is
+`CYyCamMng2` @0x1032A36C): switch on `arg->[0]` ∈ {2,3}; if
+`[[g_pCamera]+0x50] == [D6C]` → clear outer+0x50 via `sub_150C0(0)`; then
+`[D6C].vt+0x18(1); [D6C] = 0`. Controller init: `[D6C].vt+0x4(0x1035122c)`
+(thunk 0x1E4B0). The manager carries the M12 eye/lookat layout — init method
+**sub_1E4F0** (this=manager) copies three floats from template blob
+**0x1035122C** into `this+0x44..0x4C` via copy3f 0x26EB0, resets focal to
+**350.0** through setter 0x15290 (imm 0x43AF0000 @0x1E504), copies eye into
+lookat (`[this+0x50] ← [this+0x44]`), then `lookat.z += 1.0`
+(fadd [0x32961C] @0x1E51B) and set3f `(this+0xA8) = (0, -1.0, 0)`; its wrapper
+sub_1E590 additionally sets `[this+0xB4] = 3.0`, `[this+0xB8] = 6.0`
+(imm 0x40400000/0x40C00000 @0x1E598/0x1E5A2).
+
+*Consumer identity.* fn **0x1EE60** is a `__thiscall` method of the manager:
+both call sites (walker 0xA5EAC, 0xA66D3) read exactly
+`call sub_15250; mov ecx,eax; call 0x1EE60`. The two virtual calls at 0x1F19E
+and 0x1F20E (`ff 92 30 03 00 00` / `ff 90 30 03 00 00`) are therefore on the
+**manager**: slot +0x330 = **IsFreeRun** (same slot number as on the player
+class, §13 table; matches M18's "scales when not free-run" — predicate true at
+0x1F1A6 (`test al; jne 0x1F20A`) skips the ×6/max(dist,.01) scaling). Slot
++0x334 next to arm-20 (`ff 90 34 03 00 00` @0x2077F, ecx=manager) is unnamed;
+no file data pointer references any method VA of this class (nonvirtual or
+dispatched via an unregistered table). fn 0x1EE60's entry also reads the
+**bypass byte `[outer+9]`** (`mov cl,[eax+9]; test; jne` @0x1EE8F) and requires
+its argument to be CXiSkeletonActor but not XiModelActor/XiFurniture —
+`IsA`-style checks via 0x1002C8F0 with descriptor objects at **0x10330EBC**
+(name pointer 'CXiSkeletonActor' @+0) and **0x10330684** ('XiModelActor' @+0).
+
+*Dispatcher gates.* Walker dispatcher fn 0xA5E10 skips everything when app
+state `[[0x10456A28]] == 0x40` (lobby/loader). When byte **[0x10487F80]** is
+set it replaces the spring path with manager method **sub_21110(actor)**
+(call sites 0xA5E41/0xA715E: `push arg; call sub_15250; mov ecx,eax;
+call 0x21110`) and returns. sub_21110 (entry verified — prologue
+`mov al,[0x10351220]` engine-enable gate) is the **arm-8 site**: `mov
+[0x10456D7C], 0x41000000; mov [0x10456D8C], 0` (bytes @0x21147/0x21151), then
+recomputes eye/lookat through the round(tick) sub-loop. Its only callers are
+those two walker sites.
+
+*Setter census re-verified byte-exact:* every path through sub_1E2F0 reaches
+the unconditional store tail at 0x1E310 (`mov [0x10456DB0], al; mov
+[0x10456DB4], ecx`) — mode and angle always land. The 0x10456DB1 clear happens
+when flag≠0 or (old==0 && new≠0), and DB1 remains write-only (zero readers
+file-wide). The D88 latch pair (getter 0x1E2C0, setter 0x1E2D0 with
+`[D88] = arg ? 8 : 0`) has exactly ONE caller each in the whole binary — the
+walker release variant at 0xA6A50/0xA6A63 (skip-release-when-latched).
+
+*The countdown is stall-recovery machinery, not a gameplay timer.* The only
+decrement of `[D7C]` lives inside the round(tick) loop (`test eax; jle 0x1FE90`
+at 0xFA44 after `call 0x14CF0; call 0x311C2C`; decrement
+`fld [D7C]; fsub [0x32961C]; fst [D7C]` @0x1FA4F..0x1FA5B, zero-store
+@0x1FA82) — and by M20 that loop runs **zero iterations at normal frame
+rate**. Consequence for ports: the 8/20 values do not tick down during normal
+play; spring termination comes from the release path (setter with mode=0),
+not countdown expiry. The [D74] hold-off (=10 armed @0x1F2AD under the vt+0x19C
+azimuth-feedback compare, and `mov [d74], ebp` @0x1F248 when the consumer delta
+is exactly ±0) and the [D8C] 0/4 counter (set 4 @0x1FB19 after re-anchor
+commit through the vt+0x1BC push-copy; cleared by arm-8) share the same
+stall-loop gating.
+
+*Toggle bytes named from writers:* `[0x10487F80]` is written only by fn
+**sub_0A8CC0(byte)** (`mov bl,[esp+8]; mov [0x10487F80],bl`; when arg==0 and
+the 0x1047D600 object lookup via 0x81550 is non-null it also does
+`[obj+0xB2] &= ~0x04` — the same actor +0xB2 flag as look-at A1) and init
+0x11FF4; `[0x10487F81]` (M6's auto-run flag) is written by fn
+**sub_0A6070(byte)** (`mov al,[esp+4]; mov [0x10487F81],al`) and init 0x11FFA.
+
+*arm-20 reachability [I]:* no E8 caller to seed 0x20446 exists and no data
+pointer references any VA in the block; apparent calls into it from
+0x2013A/0x201BA/0x201E1 all land at **0x20773** — an instruction boundary that
+sits *after* the arm store at 0x20769, so the arm-20 store itself has no
+verified entry. Settling read: prologue-boundary walk of raw bytes
+0x204xx..0x207FF (int3/nop padding scan) to see whether the body containing
+0x20769 is a function at all.
 
 Also verified in this pass: 0x311C2C = round-to-nearest int(float) (953 call
 sites); the GetAnalogKey fnB slots (0x122E20/0x123030/0x1232E0/0x123450) are
@@ -546,6 +633,9 @@ is in [target_track.md](target_track.md) §6.
 | M21 | [local] | Mouse input object `[0x4E1D4C]`: anchor/cursor fields, ±1 edge-saturated normalized offsets (1/21 scale @0x32DF9C), screen rect `[0x106218B4..BA]`; position-based aim, **no rad/px sensitivity** | §10a |
 | M22 | [local] | Steering 0xA77A0: cursor angle quantized to 16 compass sectors (round&0xF), cos/sin+sector out into walker axes | §10a |
 | M23 | [local] | Mouse-aim dispatcher seed 0x125360 (device 0x3E buttons {8B,96}): θ=fpatan−π/2 state globals 0x1036E5F4/634 → virtual presses 0x16–0x19 with imul rate ramp; feeds the M15/M20 keyboard integration | §10a |
+| M24 | [V] | Camera manager lifecycle: outer 0x33C bytes ctor 0x10700 vptr 0x10329C14, slot +0x50 installed only via sub_151A0 (from thunk 0x1E48A; controller global [0x10456D6C]); teardown sub_1E5B0 (§11b) | §11b |
+| M25 | [V] | fn 0x1EE60 is a manager method (callers A5EAC/A66D3 `via getter`); its vt+0x330 = IsFreeRun on the manager class; entry reads bypass byte [outer+9] and gates actor type via descriptors 0x10330EBC/0x10330684 | §11b |
+| M26 | [V] | Countdown [D7C] decrements ONLY inside the round(tick) stall loop (0xFA44 gate) — never ticks during normal play; arm-8 sub_21110 walker-only under toggle [0x10487F80]; spring terminates via release (mode=0), not expiry | §11b |
 
 ## 15. Kuluu conclusions (for the walker rework)
 
@@ -585,4 +675,5 @@ is in [target_track.md](target_track.md) §6.
 - ~~Spring-back reference-angle expression (M18)~~ — **closed 2026-10-04**: no
   underflow; stream-order decode in M18's correction.
 - Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).
-- Fn 0x20446 (countdown = 20.0 @0x20769) has 0 direct callers - presumably vtable-dispatched.
+- Fn 0x20446 (countdown = 20.0 @0x20769) reachability — open [I], settling read
+  named in §11b; arm-8 **sub_21110** fully resolved (§11b).
