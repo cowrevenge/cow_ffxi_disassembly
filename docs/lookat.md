@@ -582,6 +582,92 @@ Scratch tools for this pass (session-local): `d3.py` per-call-site-`retN` esp ma
 
 
 
+### E.9 — how the two bends compose: one shared direction, each bone's own node orientation (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+E.1/E.5/E.8 recorded the pieces separately. This pass read them end to end, because kuluu had combined
+them wrong (play-test P1: shoulders turning with a frozen head). `0x2AC60` is one body; the sweep splits
+it at `0x2AE96`, which is why earlier reads saw "two functions".
+
+**Slew: floor(tick) lerp steps.** The chase of the look point runs off the frame tick, not a fixed
+per-frame step:
+
+```
+0x2ad55  e8969ffeff    call 0x14cf0             ; M29's tick getter
+0x2ad5a  d9542410      fst  [esp+0x10]          ; working copy = tick
+0x2ad6b  7546          jne  0x2adb3              ; tick <= 0 -> no chase at all this frame
+; loop body:
+0x2ad71  680000003d    push 0x3d000000           ; f32 1/32
+0x2ad84  e817c9ffff  call 0x276a0                ; lerp(dst, src, 1/32)
+0x2ad97  d8251c963210  fsub [0x1032961c]         ; tick -= 1.0   (.rdata 1.0f)
+0x2adb1  74ba          je   0x2ad6d              ; repeat while the remainder is still > 0
+```
+
+So at retail's default cap (tick = 2.0, M29 §11c) the point moves two 1/32 steps per drawn frame; a
+frame-rate-divisor-1 client gets one. kuluu integrates `elapsed_frames` instead, which agrees at 60 Hz.
+
+**Pass 1 — every record clamped against the same direction.** Two scratch slots are initialised to identity
+quaternions (`lea esi,[esp+0xb0]` / `mov ebx,2` at `0x2AEAE..0x2AEBB`, then `call 0x32a40` per slot — E.6), and
+the record loop walks them in step:
+
+```
+0x2aed1  lea ebx,[esp+0xb0]      ; cursor over the two slots, stride 0x10 (`add ebx,0x10` at 0x2AF8B)
+0x2aedc  call 0x35270            ; record index -> {xlim, ylim, scale}   (E.3)
+0x2af06..0x2af19                 ; push record / [esp+0x74] / [esp+0x30] / [esp+0x88]; mov ecx,edi; call 0x2b140
+0x2af8a  inc esi / add ebx,0x10 / cmp esi,ebp / jl 0x2aed8
+```
+
+Every operand of the clamp is produced by loop-invariant instructions (the four `lea`/`push` above), and each
+iteration stores only inside its own scratch (`[esp+0x3c]`..`[esp+0x48]`, `0x2AF3D..0x2AF56`) before writing the
+resulting quaternion into *its* slot at `ebx`. Nothing re-aims a record after another bone has bent: both
+bends are computed against one direction vector, built once before the loop from the two attach-point frames
+(§E.6: `push 3`/`push 4` at 0x2AC74/0x2AC8E, subtracted by `call 0x270a0` at 0x2ACC3) and never re-sampled
+inside the record loop; the resulting quaternion is kept in each slot for pass 2.
+
+**Pass 2 — compose onto each bone's own node, write the override table.** For `i` in the record count:
+
+```
+0x2afbd  lea esi,[edi+8]; push ebx; call 0x35270          ; same record again (limits are the gate)
+0x2afed  movsx edx, byte [esp+ebx+0x16]                    ; reference slot byte: 3 then 7 (E.8)
+0x2aff5  call 0x2a9b0                                      ; slot -> joint id            = ebx
+0x2afff  call 0x35390                                      ; joint id -> node index      = esi
+0x2b004  mov edx,[edi+0x14]; shl esi,6; add esi,edx        ; the model's live node array: [this+0x14] + node*64
+0x2b00c..0x2b018  sub esp,0x40 / mov ecx,0x10 / rep movsd  ; copy that 4x4 down to scratch (16 dwords)
+0x2b021  call 0x32e70                                      ; matrix -> quaternion: the bone's own orientation
+0x2b066/0x2b06d  call 0x32b50 twice                        ; quaternion multiply, chaining the record's bend (slot = ebp, +0x10 per record)
+0x2b072..0x2b087 mov [ebp+0],[4],[8],[0xc]                 ; product written back over the slot
+0x2b0a9  lea ebx,[ebx+ecx*4]                               ; ebx = joint id, scaled: bone*13
+0x2b0ae  lea esi,[ebx*4 + 0x1045f030]                      ; -> pose-scratch entry, stride 0x34 per BONE (E.8)
+0x2b0b7  call 0x32b50                                      ; composed orientation multiplied into that entry
+```
+
+`[this+0x14]` is therefore *persistent* bone state: this pass reads a node's current transform, multiplies the
+look-at bend onto it, and hands the result to the override table `0x1045F030 + bone*0x34` that dancer's skeleton
+build then composes through the hierarchy. Two consequences, both landed:
+
+- **the head's world turn is shoulder bend composed with head bend**, each computed from the pre-bend pose —
+  not one rigid subtree rotation stacked on another (kuluu `631a4721`, test `both_bends_compound_into_the_head_turn`);
+- **a node no clip touched this frame still holds last frame's transform** — same array, used by the motion pass.
+  Recorded separately in dancer_engine.md; kuluu `476ea336` (`carry_unkeyed_channels`).
+
+**Correction to E.1/E.5's record-skip test.** Both passes gate on the same compare pair, and the sense decides
+whether an authored record bends at all:
+
+```
+0x2aee3  fld [ecx] / fcomp [0x103295d8] (=0.0) ; xlim vs 0
+0x2aeed  test ah,0x44 ; jp 0x2af06              ; -> run the clamp
+0x2aef2  fld [ecx+4] / fcomp 0                  ; ylim vs 0 (reached only when the first compare tied)
+0x2aefd  test ah,0x44 ; jnp 0x2af8a             ; -> skip this record
+```
+
+`test ah,0x44` masks **C3 (equal) and C2 (unordered)**; `test ah,0x41` would be the C0/C3 pair, which is what a
+"greater-or-equal" test needs. C0 ("less") is deliberately *not* in this mask, so each compare asks only "is
+this float zero". Pass 2 repeats it at `0x2AFCA..0x2AFE7` with the same two outcomes. Read together: **a record
+bends unless both semi-axes are exactly zero.** The earlier "first two floats ≤ 0-ish" phrasing (E.1/E.5) is not
+what these bytes do — a negative limit is *not* skipped here; it falls through to E.2's `0x3A83126F` = 0.001
+guard inside the clamp, which is where a nonsense axis actually gets bounded. The flag mapping is anchored by a
+nearby comparison whose meaning is independently known: the slew loop above masks C3|C0 (`and eax,0x4100`) and
+must iterate while `tick − 1.0 > 0`, i.e. "ZF set ⇔ both flags clear ⇔ greater".
+
 ## F. Leads & observations carried from summary.md §9 tail (split 2026-10-05 — history, with current status tagged)
 
 Status tags as of this split: the **limit/slew/tug hunt** below was closed by §E/§E.8 (authored
