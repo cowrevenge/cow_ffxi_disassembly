@@ -242,9 +242,12 @@ Two things this settles and one it opens:
 * the numbers are **authored per-model data**, not a `.rdata` constant **[V(me)]** — so kuluu loads them from the
   skeleton chunk (the B-style data-driven path) rather than pinning a limit;
 * shoulder ellipse is smaller than head's, always with `scale = 0.5`, in every shipped record pair **[V(me)]**;
-* **open observation [O?]**: this install authors *zero* limits for the `gob_` and `sao ` (Goblin / Tarutaru)
-  skeletons and only a minority of `yagu`/`kame`. That predicts those races' models never bend a head toward the
-  target in retail. Worth one glance in-game before kuluu ships per-race behaviour that assumes otherwise.
+* **[O?] CLOSED — and the race gloss above was wrong.** Re-derived through kuluu's own skeleton parser instead
+  of a hand-written reader (`ffxi-dat/examples/dat-lookat-census.rs`, 3,368 bone chunks in this install): **every
+  playable race authors both records** — `hum_` 70/71 (HumeM), `huf_` 35/35 (HumeF), `elv_` 115/116, `tar ` 68/69
+  (**Tarutaru**, the skeleton behind file id 19776), `mit ` 59/64 (Mithra), `gal ` 41/42 (Galka). `gob_` and `sao.`
+  are mob-family rigs, not Goblin-player/Tarutaru ones, and they plus a minority of `yagu`/`kame` are what author
+  zeros. So no per-race rule may assume a race lacks a head bend: whether a rig bends is per-model data.
 
 ### E.4 Reproduce (host python, capstone 5.0.7)
 
@@ -340,8 +343,51 @@ The port (kuluu `acdf77fa`) forced a read of the bend prologue rather than the c
 
 Head is **52** (its children 53…60 are the face cluster), upper torso/chest is **50**, and 51 sits between them. Pose space: the chain advances along `+X`, up is `-Y`.
 
-Consequences for the port **[I]**:
-* record[0] ↔ slot 3 → the neck bone, which is what kuluu now bends (`acdf77fa`); with humanoids' authored numbers this yields a horizontal reach of ≈`atan(0.24)` ≈ 13.5° and vertical ≈`atan(0.16)` ≈ 9.1°, damped by `scale = 0.5` below that.
-* record[1] ↔ slot 4 resolves to the **root**, so "the second record bends neck/shoulder" is *not* expressible as "reference NECK+1 names a bone", and rotating a root over its whole subtree would be visibly wrong (§E.3's shoulder ellipse is `(0.16,0.06)` — small, consistent with a chest-side share).
+**This section's slot-4 conclusion was wrong for the bend; §E.8 replaced it.** The two attach slots read here (`3`, `4`) are what the *first* pass of the bend uses to build its frames. Which bones the two records rotate comes from a different byte pair, `{3, 7}`:
+* record[0] ↔ reference slot **3** (`EID_NECK`) → joint **51**, the neck: ≈`atan(0.24)` ≈ 13.5° horizontal and ≈`atan(0.16)` ≈ 9.1° vertical with humanoids' authored numbers, damped below that by `scale = 0.5`.
+* record[1] ↔ reference slot **7** (`EID_CHEST`) → joint **50**, the neck's parent and the owner of shoulder/arm children 60/74 — §E.3's smaller `(0.16,0.06)` ellipse is a chest-side share expressed through the hierarchy, exactly as §B describes it.
+* Slot `4` (`EID_LOOK_AT`) resolving to root with offset `(0,-1.5,-1.8)` is correct for what it is: an attach point that supplies one of the bend's frames, never a bone to rotate. "Record[1] cannot be expressed" was the result of conflating those two roles.
 
-**Still open after this pass:** what the second bend entry actually rotates — read the consumers of the two entries after the clamp (`0x2af20..0x2af8a`) and `call 0x2d8141`, which builds the basis inside the clamp. Until that is known, a port applies record[0] only (kuluu does exactly that, skipping any reference whose resolved joint is the root so no model can be turned by it).
+In every shipped rig whose records are both authored, slot 7 names the **parent** of slot 3's joint — checked against `hum_`, `huf_`, `elv_`, `tar `, `mit `, `gal ` **[V(me)]**.
+
+### E.8 — which bones the two records rotate: the reference pair {3, 7} (pass of 2026-10-03 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+The bend holds its bone references as two stack bytes written in the prologue and indexed by record number — separate from the attach slots that build its frames (§E.6):
+
+```
+0x2ac7a  mov byte ptr [esp+0x1e], 3       ; *** reference slot used by record 0 ***
+0x2ac7f  mov byte ptr [esp+0x1f], 7       ; *** reference slot used by record 1 ***
+...
+0x2afed  movsx edx, byte ptr [esp+ebx+0x16]   ; ebx = the record counter; the same two bytes
+0x2aff5  call 0x2a9b0                         ; (model, slot) -> joint id
+0x2b0ae  lea  esi, [ebx*4 + 0x1045f030]       ; *** that joint's pose-scratch entry, stride 52 ***
+```
+
+The slot arithmetic closes with no remainder: both writes happen at `esp` −296 (slots −266 / −265) and the indexed read has base slot −266 for `ebx ∈ {0,1}`. The earlier "2-byte discrepancy" was an artifact of assuming callees' stack cleanup; resolving each call site's real `ret N` from its own bytes (`0x35270` is `ret 4`, `0x2b140` is `ret 16`, `0x2a750` is `ret 8`) removes it.
+
+**The byte is a reference-table index**, i.e. the table kuluu parses as `Skeleton::references`:
+
+```
+0x2a9b5  push esi; add ecx,8; call 0x351f0    ; references[slot] — entry stride 26 (§E.4)
+0x2a9c6  cmp  esi, 0x80                        ; slot must be below 128
+0x2a9d4  movsx eax, word ptr [eax]             ; *** entry+0 u16 = joint index ***
+```
+
+The other ten callers of `0x2a9b0` push the constants `3`, `4`, `7`, `0x7e`, `0x7f` **[V(me)]**; XIM names those `EID_NECK`, `EID_LOOK_AT`, `EID_CHEST`, `EID_L_WEPON_JOINT`, `EID_R_WEPON_JOINT` `[web]` (XIClient `EID_INDEX.h`).
+
+Three things fell out of reading both passes, and all three changed what kuluu had shipped:
+* **The rotated bone is the reference's own joint.** Pass two writes that joint's pose-scratch record (`g_poseScratch 0x1045f030`, 52 bytes per bone — agrees with DancingMad `[web]`), so there is no hidden remap and no "NECK + record" arithmetic.
+* **Two records naming one bone overwrite rather than compound.** The starting matrix each record uses is read from `[model+0x14] + 64·idx`, `idx = 0x35390(joint)` returning `byte[bones + 30·joint]` — a cache the bend never writes (`rep movsd`, RVA 0x2b004..0x2b018). A sibling accessor, `0x2a9e0`, maps joint→matrix with no such indirection; why those two differ is **[I]** and does not affect which bone moves. 11 shipped rigs (`slim`, `doll`, `butt`, `raff`…) name one bone from both records, so the later record's ellipse is what limits it.
+* **A root can legitimately be a bend bone.** Exactly one rig in 3,368 (`raff`) authors non-zero limits on references that resolve to joint 0 — retail rotates its root. "Skip anything resolving to the root" is therefore not a rule; kuluu had exactly that and it went.
+
+Reproduce (host python, capstone 5.0.7):
+```python
+d=open('C:/tmp/ffximain_work/FFXiMain.unpacked.dll','rb').read()
+assert d[0x2ac7a:0x2ac84]==bytes.fromhex('c644241e03c644241f07')   # the pair {3, 7}
+d[0x2afed:0x2afed+5].hex()                                       # 0fbe541c16 = movsx edx,[esp+ebx+0x16]
+# per-race joints + authored limits (kuluu's PC_SKELETON_FILE_IDS, HumeM=1..Galka=8):
+#   cargo run -p ffxi-dat --example dat-lookat-census -- <install> \
+#       7072 10248 13424 16600 19776 23176 26352
+```
+
+Scratch tools for this pass (session-local): `d3.py` per-call-site-`retN` esp map, `pass2.out`, `census.out`. Landed in kuluu as `fix(actor): bend the second look-at record onto the bone retail names it`.
