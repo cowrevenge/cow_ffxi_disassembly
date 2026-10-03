@@ -78,7 +78,11 @@ hardcoded model (`HEAD_MAX_TURN_RAD`, `HEAD_VIEW_CONE_COS`, `HEAD_SLEW_TAU_FRAME
 - **The "bend" (body tug / shoulder share)**: **FOUND [V] (W3).** `0x2AC60` reads the look point `model+0xB0..B8`
   and weight `model+0xBC`, chases at **1/32 of the remaining distance per tick** (`push 0x3D000000` @`0x2AD71`),
   and bends record[0] (head) always plus record[1] (neck/shoulder) — the second bone is dropped when status
-  predicate `0x84390` returns `{0x30} ∪ {0x3F..0x53}` ([lookat.md](lookat.md) §E.1).
+  predicate `0x84390` returns `{0x30} ∪ {0x3F..0x53}`, **corrected to** `{5} ∪ {0x2F, 0x30} ∪ {0x3F…0x53} ∪ {0x55}`
+  by the equality chain at `0x2AE0D..0x2AE8B` ([lookat.md](lookat.md) §E.6). The bend's two entries are
+  **attach-point positions** (slot 3, then slot 4 — fetched through `0x2a750`, which resolves a reference like
+  kuluu's `Skeleton::references`), not bone indices; in the HumeM skeleton slot 3 is neck joint 51 and slot 4
+  resolves to the **root** ([lookat.md](lookat.md) §E.6/§E.7).
 - **When it looks away**: **RESOLVED [V] (W2)** — positional, not angular: release at horizontal distance
   ≤ **0.3**, or forward component ≤ **−0.5** in actor-local space (forward = +X).
 - **Up/down**: none in the menu path (one fpatan, one axis [V]); **the walker does have vertical travel** — `ylim`
@@ -325,11 +329,15 @@ bone matrices -> render
 **Walker look-at — CLOSED [V] (W2+W3).** Target selection/gates, attach-point-3 look point, mode float,
 positional release and ±0.04 weight ([lookat.md](lookat.md) §B) plus the bend `0x2AC60`, the 1/32-per-tick chase,
 the ellipse clamp `0x2B140` and its authored per-model records (§E). Nothing structural remains for look-at; what
-remains is *use*: kuluu must load `{xlim, ylim, scale}` from skeleton chunk `0x29` (`refs_end + 0x48`, stride 12)
-and apply the ellipse + weight + positional-release rule instead of its cone/slew constants.
-Open sub-questions worth one more pass later: what the clamp's two scaling branches
-(`scale × 100.0f` vs `scale / x`) are selected by, and accessor `0x35290`'s `+0x24` (a fourth record? another
-consumer at `0x23BE0`). Both are polish — the shipped data has exactly two meaningful records.
+remains is *use*: **record[0] landed** in kuluu (`jw-stack-815 acdf77fa`) — limits now come from
+`Skeleton::look_at_limits` and bend the reference-slot-3 bone inside its authored ellipse.
+The two sub-questions flagged earlier are closed ([lookat.md](lookat.md) §E.6): the clamp's branches are selected
+by the sign of the depth component (`1.0/w` in front, `scale × 100` behind), the comparison radius after
+aspect-normalisation is `min(xlim, ylim)` — i.e. exact point-in-ellipse with radial projection onto the boundary —
+and the `push 2.0f` helper is a uniform vec3 scale that provably cannot change the aim.
+Still open, and blocking record[1] (the shoulder share): what the second bend entry rotates — read the entry
+consumers at `0x2af20..0x2af8a` and the basis builder inside the clamp (`call 0x2d8141`), plus accessor
+`0x35290`'s `+0x24` (a fourth record? another consumer at `0x23BE0`).
 
 **Data-side leftovers** ([drivetask.md](drivetask.md) §10): the dispatch rule is now byte-confirmed
 (`case = type − 2`, bound `cmp edx,0xC1` ⇒ **194** jump-table entries; our earlier "196" was a scan that

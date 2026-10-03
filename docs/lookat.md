@@ -298,9 +298,50 @@ So the ellipse acts on **the two in-plane components of the look offset after it
 
 Constants confirmed: `0x103295d8 = 0`, `0x1032a22c/0x3a83126f = 0.001` (guard), `0x1032961c = 1.0`, `0x1032a3c8 = 100.0`.
 
-**Still open before a kuluu port (named, cheap):**
-* which matrix the per-entry frame at `[esp+0x88]/[esp+0x30]` is — read the two-entry builder `0x32a40` and the basis call `0x2d8141`, since that decides whether xlim/ylim land on the bone's own axes or the actor's;
-* what the hypot compares against exactly (which of {xlim, ylim} after aspect-normalisation) — trace FPU stack depth from `0x2b253`;
-* the `push 2.0f` helper `0x272b0` (scale-by-2 on which component).
+**Still open before a kuluu port (named, cheap):** — two of these three are now closed by **§E.6**; the basis question is the one that stays.
+* which matrix the per-entry frame at `[esp+0x88]/[esp+0x30]` is — read the two-entry builder `0x32a40` and the basis call `0x2d8141`, since that decides whether xlim/ylim land on the bone's own axes or the actor's; **(open: §E.6 shows what they are not)**
+* what the hypot compares against exactly (which of {xlim, ylim} after aspect-normalisation) — trace FPU stack depth from `0x2b253`; **closed → `min(xlim', ylim')` of the guard-clamped axes, §E.6**
+* the `push 2.0f` helper `0x272b0` (scale-by-2 on which component). **closed → uniform vec3 scale (`0x272b0`), provably irrelevant to the aim, §E.6**
 
 Nothing here changes §B/§E.1–E.4; it pins down the shapes E.2 left open and lists exactly what a port still has to read.
+
+### E.6 — reading the bend itself: attach frames, the status set, and what kuluu shipped (pass of 2026-10-02 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+The port (kuluu `acdf77fa`) forced a read of the bend prologue rather than the clamp in isolation. New bytes:
+
+```
+0x2ac71  mov  edi, ecx                      ; this = model
+0x2ac74  push 3                             ; *** attach point index 3 -> out [esp+0x8c] ***
+0x2ac84  call 0x2a750                       ; (out*, idx) : attach-point POSITION accessor
+0x2ac8e  push 4                             ; *** attach point index 4 -> out [esp+0x2c] ***
+0x2ac92  call 0x2a750
+0x2acc3  call 0x270a0                       ; componentwise a -= b (vec3): entryA - entryB
+```
+
+* **`0x2a750` is an attach-point accessor, not a bone getter**: it calls `0x26e10(out)` then `0x2a780(out, idx)`, and `0x2a780` looks the reference up on `[model+8]` through `0x351f0(idx)` — the same reference table kuluu parses as `Skeleton::references`. So the bend's two frames are **vec3 positions** at attach points 3 and 4, and `0x270a0` subtracts one from the other **[V(me)]**.
+* The per-entry builder is trivial — `0x32a40 → 0x32a50` writes `{0,0,0,1}` into each of the two entries (stride `0x10`, `ebx = 2` at RVA 0x2AEB5): an **identity rotation**, i.e. scratch output state per record, *not* a bone basis **[V(me)]**. §E.5's guess that these hold a per-entry matrix is wrong in detail: the matrices live inside the clamp (`0x2b167..0x2b1a7` initialises a local quaternion `(0,0,0,1)` plus an axis vector `(0,1,0,..)`, then calls `0x2d8141`) **[V(me)]**.
+* **The one-record status set is wider than §E.1 said.** The bend receives the own-status value as a stack argument (`[esp+0x128]`) and runs an equality chain at RVA 0x2AE0D..0x2AE8B over
+  `{5} ∪ {0x2F, 0x30} ∪ {0x3F…0x53} ∪ {0x55}` — a match jumps to the write of loop-count `1` (RVA 0x2AE96), otherwise count `2` (RVA 0x2AE8B/0x2AE90) **[V(me)]**. §E.1's `{0x30} ∪ {0x3F..0x53}` missed `5`, `0x2F` and `0x55`.
+* Statuses `5` and `0x55` additionally get `1.0f` subtracted from a float parameter at RVA 0x2ACA8..0x2ACB2 before any of this **[V(me)]** — semantics unknown, and irrelevant to a head bend that only carries one record.
+* **The `push 2.0f` helper is `0x272b0(vec3*, scalar)`: it multiplies all three components** (RVA 0x272b8/0x272c0/0x272ca, no ret-immediate, uniform). Because the front branch then scales by `k = 1.0/w` on that same doubled vector and `w` was doubled too, the factor cancels exactly; behind the plane it only pushes an already-over-limit point further past a rim whose position depends solely on its bearing. **The ×2 cannot change the aim direction** — a port may ignore it **[V(me)]**.
+* **The comparison radius is `min(xlim', ylim')`.** Both aspect-normalisation arms leave a circle: when `xlim' ≤ ylim'` (fall-through at RVA 0x2B21F) the second in-plane component is scaled by `xlim/ylim`; when `xlim' > ylim'` (RVA 0x2B239) the first by `ylim/xlim`. Either way `hypot` is then compared with the *smaller* guard-clamped axis, and on the over-limit arm the shrunk component is divided back by the stored ratio (`[esp+8]`, written at RVA 0x2B227/0x2B243; restored at RVA 0x2b2f7..0x2b30c). Read end to end this is exactly *point-in-ellipse* with semi-axes `xlim' × ylim'` plus radial projection onto the boundary **[V(me)]** — which closes §E.5's second bullet and confirms §E.2's "genuinely elliptical".
+
+### E.7 — joint identity for the reference slots, from the HumeM skeleton (data side) **[V(me)]**
+
+`ROM/27/82.DAT`, chunk kind `0x29`, name `hum_`: 94 joints, 128 references, records `(0.24,0.16,0.5) (0.16,0.06,0.5) (0,0,0.5)`.
+
+| attach slot | joint | chain | note |
+|---|---|---|---|
+| 2 (`ABOVE_HEAD`) | 0 (root) | root | offset `(0,-2,0)` — the nameplate anchor kuluu already uses |
+| **3** | **51** | 51→50→49→48→2→1→0 | neck; `trn (0.26,0,0)`, parent of head |
+| **4** | **0 (root)** | root | offset `(0,-1.5,-1.8)` — **not a shoulder bone** |
+| 5 / 6 | 52 (head) | …→51→52 | head-relative anchors (`(0.18,0,0)`, `(0.05,-0.12,0)`) |
+| 7 | 50 | …→49→50 | offset `(0.05,-0.13,0)`; joint 50's children 60/74 (`+0.24` each) are the shoulder/arm roots |
+
+Head is **52** (its children 53…60 are the face cluster), upper torso/chest is **50**, and 51 sits between them. Pose space: the chain advances along `+X`, up is `-Y`.
+
+Consequences for the port **[I]**:
+* record[0] ↔ slot 3 → the neck bone, which is what kuluu now bends (`acdf77fa`); with humanoids' authored numbers this yields a horizontal reach of ≈`atan(0.24)` ≈ 13.5° and vertical ≈`atan(0.16)` ≈ 9.1°, damped by `scale = 0.5` below that.
+* record[1] ↔ slot 4 resolves to the **root**, so "the second record bends neck/shoulder" is *not* expressible as "reference NECK+1 names a bone", and rotating a root over its whole subtree would be visibly wrong (§E.3's shoulder ellipse is `(0.16,0.06)` — small, consistent with a chest-side share).
+
+**Still open after this pass:** what the second bend entry actually rotates — read the consumers of the two entries after the clamp (`0x2af20..0x2af8a`) and `call 0x2d8141`, which builds the basis inside the clamp. Until that is known, a port applies record[0] only (kuluu does exactly that, skipping any reference whose resolved joint is the root so no model can be turned by it).
