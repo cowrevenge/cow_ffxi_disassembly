@@ -570,9 +570,9 @@ What
 0x1F14A  d9 5f 48         fstp [edi + 0x48]
 ```
 
-i.e. retail's live camera-orbit law is **one accumulation per frame**, `tick × axis × 0.10666667 rad`;
-the scalar unit of `tick` (and therefore the degrees/second) is still **[I]**, and that single unknown is
-what every aim-rate calibration in kuluu stands on.
+i.e. retail's live camera-orbit law is **one accumulation per frame**, `tick × axis × 0.10666667`;
+the scalar unit of `tick` closed as an integer count of 1/60 s (**M29, §11c [V]**), so the sum of ticks over
+any real second is always ≈60 and every rate in this layer resolves to *coefficient × 60 per second*.
 Writer hunt for `[camera+0x28]`, this pass: register-pairing sweep (`mov reg,[0x104568fc]` …
 `[…reg+0x28] =`, tool `tools/store_after_global_load.py`) returns no object store — only the two getter
 reads and one unrelated word store; intersecting "sweep regions that load the camera global" with
@@ -580,8 +580,139 @@ stores to `[any reg + 0x28]` yields exclusively `[esp + 0x28]` stack slots. Comb
 negative results (register tracking through reassignment/lea/thiscall setters/thunks), plus two added today —
 zero absolute-reference occurrences of `0x10456924` (= g_pCamera+0x28) anywhere in `.text`, and the
 `--same-region` intersection over the **94** sweep regions that load `[0x104568FC]`, which again yields only
-`[esp + 0x28]` stack slots — the tick's origin stays indirect and named: either find a store through a pointer copy (e.g. `lea ecx,[eax+0x28]` + call) or
-settle it empirically by measuring degrees-turned per second in game while holding E at default distance.
+`[esp + 0x28]` stack slots — those hunts came up empty because they were looking for the wrong shape:
+the writer never loads the global, and its sweep-assigned fragment has zero callers (§11c).
+
+### §11c — M29: the frame tick, end to end [V]
+
+Every line below was re-read from raw bytes in TDS **0x6A995428** on 2026-10-03 (`disasm.py` on
+`FFXiMain.unpacked.dll`, `xref.py` for the call-site census). This closes the tick-unit question that every
+aim-rate calibration in kuluu has been standing on.
+
+**The object.** Allocated and constructed once:
+```
+0x1569  68 3c 03 00 00     push 0x33c                 ; size 828
+0x156e  e8 48 06 31 00     call 0x10311bbb            ; operator new
+0x1573  83 c4 04           add esp, 4
+```
+Ctor **0x10700** stores vptr **0x10329C14** (at 0x10777) and initialises the pacing block:
+```
+0x10770  b9 00 00 80 3f             mov ecx, 0x3f800000      ; 1.0f
+0x1078b  c7 46 2c 00 00 80 bf       mov dword ptr [esi + 0x2c], 0xbf800000   ; -1.0f
+0x10792  89 4e 28                   mov dword ptr [esi + 0x28], ecx           ; tick = 1.0f
+0x10795  c7 46 30 02 00 00 00       mov dword ptr [esi + 0x30], 2             ; divisor = 2
+0x1079c  89 46 34                   mov dword ptr [esi + 0x34], eax           ; frame counter = 0
+0x1079f  89 46 38                   mov dword ptr [esi + 0x38], eax           ; whole-frame accumulator = 0
+0x107a2  89 46 3c                   mov dword ptr [esi + 0x3c], eax           ; fractional carry = 0
+```
+The three accessors are thunks over the global: `0x14CF0` tick (getter above, **215** call sites re-counted),
+its twin `0x14D20` (3 references), and a frame-counter getter at **0x14D50** (`a1 fc 68 45 10 / 8b 40 34 / c3`
+= `[obj+0x34]`).
+
+**The clock sub-object** lives at `[obj+0x1C]` (factory **0x191D0**, ctor **0x19490**, base ctor **0x19210**,
+vptr **0x1032A118**). Base ctor leaves vptr 0x1032A08C and sets `[+4]` (fps) and `[+8]` (time scale) both to
+`0x3F800000`. Every clock slot reads wall time through the WINMM import thunk `[0x10329400]` (`timeGetTime`, ms):
+
+| slot | body | what it does |
+|---|---|---|
+| `vt+0x20` | 0x194F0 | advance: `elapsed = now − [+0xC] − [+0x1C]`; `[+0xC] = now`; `[+0x14] += elapsed`; `[+0x18] = [+0x1C] = 0` |
+| `vt+0x24` | 0x19550 | fps: `elapsed = now − [+0x1C] − [+0xC]`; **if elapsed == 0 then elapsed = 1** (0x19566); `fps = 1000.0 / elapsed` (`df 6c 24 04 / d8 3d d8 9c 32 10`, `.rdata 0x329CD8` = 1000.0f), stored `[this+4]` |
+| `vt+0x28` | 0x19590 | elapsed ms as float |
+| `vt+0x30` | 0x19230 | time scale: `fld [ecx+8]` |
+| `vt+0x34` | 0x19240 | set scale: `mov eax,[esp+4]; mov [ecx+8],eax; ret 4` |
+
+So the "max(elapsed, 1)" in M18's read is an *integer equality guard on whole milliseconds* (0x19566), not a
+floating clamp.
+
+**The writer** is the tail of the frame loop — **0x12A31** onward. The sweep assigns `0x12A31..0x12B66` as its
+own function with **zero callers**, and `esi` (the object, which also serves `[esi+0x10]`/`[esi+0x12]` viewport
+words and `[esi+0x31C]`, all inside the 828-byte allocation) is already live on entry: that pair of facts is exactly
+why every `mov reg,[0x104568fc] … [reg+0x28]=` hunt missed it. Its position in the frame is provable from the
+calls that precede the pacing loop — `mov ecx,[0x1045666c]; call 0x10009740` then `call 0x10009720`
+(EndScene/Present on CDx, §DancingMad's frame map agrees [web]):
+```
+0x12b12  8b 4e 1c                   mov ecx, [esi + 0x1c]      ; clock
+0x12b1d  ff 52 30                   call dword ptr [edx + 0x30]        ; time scale
+0x12b28  ff 50 24                   call dword ptr [eax + 0x24]        ; fps
+0x12b2b  d8 4c 24 18                fmul dword ptr [esp + 0x18]        ; × scale
+0x12b2f  d9 1d 60 69 45 10          fstp dword ptr [0x10456960]        ; measured fps×scale
+0x12b35  d9 05 e8 9c 32 10          fld  dword ptr [0x10329ce8]        ; 60.0f (.rdata 0x329CE8)
+0x12b3b  d8 35 60 69 45 10          fdiv dword ptr [0x10456960]        ; raw = 60 / fps   (elapsed in 1/60 s units)
+0x12b41  d9 56 2c                   fst  dword ptr [esi + 0x2c]
+0x12b44  d9 56 28                   fst  dword ptr [esi + 0x28]        ; tick (pre-round)
+0x12b47  db 46 30                   fild dword ptr [esi + 0x30]        ; divisor
+0x12b4a  d9 c1                      fld  st(1)
+0x12b4c  de d9                      fcompp
+0x12b50  25 00 01 00 00             and  eax, 0x100               ; C3 only
+0x12b55  74 0f                      je   0x10012b66
+0x12b57  6a 01                      push 1
+0x12b60  ff d5                      call ebp                       ; ebp = [0x103290f8] Sleep
+0x12b62  f3 90                      pause
+0x12b64  eb ac                      jmp  0x10012b12                ; re-measure: frame-cap spin
+```
+The *control flow* of the cap is [V] (Sleep(1) + `pause` + re-measure, gated on the divisor field, with a
+"did we sleep yet" byte at `[esp+0x17]/[esp+0x1b]` re-tested at 0x12B66); the polarity of that single masked-C3
+test is recorded as bytes only — reading it as "wait until elapsed reaches the divisor quantum" is **[I]**.
+
+Then the smoothing/floor/clamp sequence, all in the same body:
+```
+0x12bd4  d8 46 3c                   fadd [esi + 0x3c]            ; carry-in
+0x12bd9  e8 4e f0 2f 00             call 0x10311c2c              ; ftoi_round
+0x12be9  89 46 38                   mov [esi + 0x38], eax        ; whole 60 Hz frames this tick
+0x12bec  d8 e9                      fsubr st(1)
+0x12bee  d9 5e 3c                   fstp [esi + 0x3c]            ; fractional carry out
+0x12bf5  ff 50 20                   call dword ptr [eax + 0x20]  ; clock advance (vt+0x20)
+0x12bf8  a3 74 69 45 10             mov [0x10456974], eax        ; ring index (idx+1)&3
+0x12c0f  89 14 85 64 69 45 10       mov dword ptr [eax*4 + 0x10456964], edx   ; tick into ring
+0x12c16  89 5e 2c                   mov [esi + 0x2c], ebx        ; zero the sum accumulator
+         ; 0x12C1E..0x12C2E sums ring 0x10456964..0x10456973 (the index global sits one dword past it)
+0x12c33  d8 0d e4 9c 32 10          fmul dword ptr [0x10329ce4]  ; × 0.25 → mean of the 4-entry ring
+0x12c3c  e8 eb ef 2f 00             call 0x10311c2c              ; ftoi_round
+0x12c45  db 44 24 18                fild dword ptr [esp + 0x18]
+0x12c49  d9 56 28                   fst  dword ptr [esi + 0x28]  ; tick = round(mean)
+0x12c4c  db 46 30                   fild dword ptr [esi + 0x30]
+         ; floor: if tick < divisor then tick = divisor (0x12C5E/0x12C62 store the divisor into [obj+0x28])
+0x12c65  d9 46 28                   fld dword ptr [esi + 0x28]
+0x12c68  d8 1d e0 9c 32 10          fcomp dword ptr [0x10329ce0] ; 20.0f (.rdata 0x329CE0)
+0x12c70  25 00 41 00 00             and eax, 0x4100              ; ZF|AF — NaN-safe "if !(tick <= 20)"
+0x12c77  c7 46 28 00 00 a0 41       mov dword ptr [esi + 0x28], 0x41a00000   ; tick = 20.0f
+0x12c98  d9 05 e8 9c 32 10          fld dword ptr [0x10329ce8]   ; 60.0f
+0x12c9e  d8 76 28                   fdiv dword ptr [esi + 0x28]
+0x12ca6  d9 1d 60 69 45 10          fstp dword ptr [0x10456960]  ; effective fps = 60 / tick
+0x12cac  8b 46 34                   mov eax, dword ptr [esi + 0x34]
+0x12caf  40                         inc eax
+0x12cb0  89 46 34                   mov [esi + 0x34], eax      ; frame counter++
+0x12cb3  75 03                      jne 0x10012cb8             ; wrapped to 0?
+0x12cb5  89 7e 34                   mov [esi + 0x34], edi      ; reset to 1 (edi = 1)
+```
+Side note that explains an old error of ours: the `and eax,0x4100` idiom *is* real — it is this clamp at
+0x12C70. It simply does not live at 0x14CF0, where the getter uses `test ah,5` (see §11 above).
+
+**The unit.** `[obj+0x28]` is an **integer-valued count of 1/60 s**. `[obj+0x30]` is the frame-rate divisor —
+cap = 60/divisor fps, default **2 → 30 fps**, which is the well-known FFXI "fps divisor" patch target; 1 would
+mean no cap. At the shipped default `tick == 2.0` every frame. The getter's `max(tick, 1.0)` floor is real but
+can never bind at divisor 2: **the binding floor is the divisor inside the writer**, so M20's clamp finding
+stands and gains its magnitude from here.
+
+**Consequences for the rate laws.** Summed over a real second, `Σ tick ≈ 60` regardless of the cap (that is what
+making it elapsed-in-1/60s-units buys). So any per-tick coefficient `c` in this layer is **60·c per second**:
+focal zoom `+tick × 6.0` → 360 focal/s, i.e. 350 → 900 in ≈1.5 s; the wheel takes the same arm; Q/E and arrow
+aim take `tick × axis × 0.10666667` per frame (see §10 for the unit of `[cam+0x48]`). Countdowns consume tick as
+integer frames — verified consumer at 0x1EEFE..0x1EF18:
+```
+0x1eefe  e8 ed 5d ff ff   call 0x10014cf0            ; tick
+0x1ef03  e8 24 2d 2f 00   call 0x10311c2c            ; ftoi_round
+0x1ef08  8b 0d 74 6d 45 10 mov ecx, [0x10456d74]     ; hold-off counter (M18 arms this at 10)
+0x1ef0e  2b c8            sub ecx, eax
+0x1ef10  89 0d 74 6d 45 10 mov [0x10456d74], ecx
+0x1ef16  79 0a            jns 0x1001ef22
+0x1ef18  c7 05 74 6d 45 10 00 00 00 00 mov dword ptr [0x10456d74], 0   ; clamped at 0
+```
+so the hold-off `[0x456D74] = 10` is 10 × 1/60 s ≈ 0.17 s and `0x10456D7C = 20.0` is **1/3 s**.
+
+**Method rule (re-earned).** A sweep-assigned fragment with zero callers is not a dead function; walk backwards
+over the preceding bytes before believing it, and remember that an object can be live in `esi` across an entire
+frame body without any absolute global load inside the fragment you are hunting.
 
 Consequence of the *older* reading (kept for continuity): the `round(tick)` sub-loops (history loop
 0x1F667, re-anchor loop 0x1FA4F..0x1FE88) run **zero iterations** at a normal frame rate - they are
@@ -812,8 +943,13 @@ is in [target_track.md](target_track.md) §6.
 | 0x32A3D8 | 900.0 | zoom upper clamp, focal (M17) |
 | 0x32A3D4 | 242.0 | zoom lower clamp, focal (M17) |
 | 0x32A3DC | 350.0 | both-keys zoom snap target = focal default (M17) |
-| 0x329CE4 | 0.25 | both-keys zoom ease factor (M17; dead step) |
-| 0x32A3E8 | 6.0 | zoom rate per tick, focal units (M17) |
+| 0x329CE4 | 0.25 | both-keys zoom ease factor (M17; dead step) **and** the frame-tick ring mean (M29, at 0x12C33) |
+| 0x32A3E8 | 6.0 | zoom rate per tick, focal units (M17) = 360 focal/s (M29) |
+| 0x329CD8 | 1000.0 | clock fps numerator `1000.0 / elapsed_ms` (M29, at 0x1957D) |
+| 0x329CE8 | 60.0 | reference frame rate: tick raw = 60/fps and effective fps = 60/tick (M29, 0x12B35/0x12C98) |
+| 0x329CE0 | 20.0 | tick upper clamp — 1/3 s of wall time (M29, 0x12C68) |
+| 0x10456960 | float | measured fps×scale, then overwritten with effective fps = 60/tick (M29) |
+| 0x10456964..73 + 0x10456974 | float[4] + int | the tick ring and its index (M29); summed 0x12C1E, ×0.25 |
 | 0x32A778 | 1/128 | keyboard analog axis scale (M20) |
 | 0x329A18 | 0.01 | re-anchor eye-move scale (M20) |
 | 0x40466666 | 1.5 | re-anchor loop scale (M20) |
@@ -846,7 +982,8 @@ is in [target_track.md](target_track.md) §6.
 | M17 | [local] | Zoom/focal: ±tick·6.0 (0x32A3E8), clamps 900.0/242.0 (0x32A3D8/0x32A3D4); both keys snap to 350.0 via byte 0x10456D84; wheel same path; store 0x15290→cam+0x2F8 (old M17 "pitch 23/10/15" was a XIClient leak — §11) | §11 |
 | M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; stored ref = axis·π/2·turn — the "underflow" claim is retracted (correction §11) | §11 |
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
-| M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); held Q/E ≈ 0.1058 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
+| M20 | [local] | ~~Tick = seconds (write site indirect)~~ — the tick is **elapsed in 1/60 s units, integer-valued** (M29 supersedes; the getter and the 1/128 axis census stand); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); state block 0x10456D70..0x10456DB4 | §11 |
+| M29 | [V] | The frame tick, end to end: object `[0x104568FC]` (0x33C bytes, ctor 0x10700 — `+0x28` tick 1.0f, `+0x2C` -1.0f, `+0x30` divisor 2, `+0x34/38/3C` 0); clock sub-object `[obj+0x1C]` (vptr 0x1032A118; vt+0x20 advance / +0x24 fps=1000/max-elapsed-int / +0x30 scale) on `timeGetTime`; writer = frame-loop tail 0x12A31 (EndScene/Present then Sleep(1)+pause cap spin, ring mean ×0.25 → round → floor at divisor → clamp 20.0, effective fps = 60/tick); **unit = integer count of 1/60 s**, Σ tick ≈ 60 per second whatever the cap; countdowns consume whole frames (0x1EEFE..0x1EF18) | §11c |
 | M21 | [local] | Mouse input object `[0x4E1D4C]`: anchor/cursor fields, ±1 edge-saturated normalized offsets (1/21 scale @0x32DF9C), screen rect `[0x106218B4..BA]`; position-based aim, **no rad/px sensitivity** | §10a |
 | M22 | [local] | Steering 0xA77A0: cursor angle quantized to 16 compass sectors (round&0xF), cos/sin+sector out into walker axes | §10a |
 | M23 | [local] | Mouse-aim dispatcher seed 0x125360 (device 0x3E buttons {8B,96}): θ=fpatan−π/2 state globals 0x1036E5F4/634 → virtual presses 0x16–0x19 with imul rate ramp; feeds the M15/M20 keyboard integration | §10a |
@@ -868,13 +1005,13 @@ is in [target_track.md](target_track.md) §6.
   and re-assigns the body heading so the body keeps facing travel (M15). A
   kuluu Q/E that orbits the camera and rotates the body is retail-shaped.
   Ported to kuluu (view_native/input.rs) — **two ports are wrong, flagged for
-  a user decision**: (1) held Q/E orbit was ported at 0.211667 rad/s
-  (~12.1°/s); retail is ≈ 0.1058 rad/s (~6.1°/s, M15/M20) — the port is 2×
-  too fast; (2) "pitch 6°/s, clamp 23/10, both-keys ease to 15" was ported
-  from the pre-correction M17 — the real M17 is **focal-driven zoom** (±6.0
-  focal/s, clamps 900/242, both keys snap to 350, M17); it is zoom, not
-  pitch, and needs replacement, not tuning. The left/right arrows have no
-  retail rate in this build (M19).
+  a user decision**: (1) held Q/E orbit was ported at 0.211667 rad/s (~12.1°/s), then
+  re-derived as `tick × axis × 0.10666667` per frame — which with M29's unit is ≈**6.4 per second** at full
+  deflection, so the kuluu number can only be right once `[cam+0x48]`'s unit is named (§16); (2) "pitch 6°/s,
+  clamp 23/10, both-keys ease to 15" was ported from the pre-correction M17 — the real M17 is **focal-driven
+  zoom**: retail integrates ±`tick × 6.0` = **360 focal/s** (M29), clamps 242..900, both keys snap to 350. It is
+  zoom, not pitch, and needs replacement, not tuning. The left/right arrows have no retail rate in this build
+  (M19).
 - Spring-back exists in retail and is fully byte-decodable (M18, corrected:
   stored ref angle = axis·π/2·turn per facing event; consumer orbits look-at by
   −ref ×6/max(dist,.01) while mode ≠ 0). Documented, not ported.
@@ -888,7 +1025,8 @@ is in [target_track.md](target_track.md) §6.
 - The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
 - 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
-- The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.
+- ~~The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.~~ — **closed 2026-10-03** by M29 (§11c): the writer is the frame-loop tail at 0x12A31, and it keeps the object in `esi`, which is why every global-load hunt missed it.
+- Unit of `[cam+0x48]` (the accumulated azimuth that Q/E and mouse aim integrate, M15/M29): the per-frame accumulation at 0x1F147 is `tick × axis × 0.10666667`, which sums to ≈6.4/s at full deflection — too fast for radians, so its consumer (the fsin/fcos or a π/180 multiply) has to be read before the aim rate can be stated in degrees. Next named read.
 - ~~Spring-back reference-angle expression (M18)~~ — **closed 2026-10-04**: no
   underflow; stream-order decode in M18's correction.
 - Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).

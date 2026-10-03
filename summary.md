@@ -318,7 +318,8 @@ not just a number.
 
   stride 4, `XiAtelBuff` 684 bytes); actor `CXiSkeletonActor` (vtable 0x330F40, 64 slots);
 
-  clock object 0x47BFA8; tick 0x14CF0 (seconds, clamped ≤ 1.0); animation clock 0x65CB14.
+  clock object 0x47BFA8; frame-tick getter 0x14CF0 on the camera/frame object `[0x104568FC]` — an **integer count
+  of 1/60 s** (writer at the frame-loop tail 0x12A31, M29); animation clock 0x65CB14.
 
 - **D1 evidence pass — the queue/mask/policy machine is byte-verified; no freeze during blends [V].**
 
@@ -618,7 +619,9 @@ Two layers: the **driver** (F pass) picks *which routine/clip* to play; the **sk
 
   `CXiSkeletonActor` (`ActorPointer` at +0xA0) [V].
 
-- A **per-frame tick** (0x14CF0, ~1/60 s, clamped ≤ 1.0) drives [V] (M20):
+- A **per-frame tick** (0x14CF0 — an integer count of 1/60 s; the getter floors at `max(tick, 1.0)` and the
+  writer floors it at the frame-rate divisor (default 2 = a 30 fps cap) with a hard clamp ≤ 20) drives [V] (M20,
+  unit closed by M29 §11c):
 
   - **Local player** → control function 0xA65CB (input → movement → position + facing).
 
@@ -794,7 +797,22 @@ call *is* proven. This reverses this session-line's earlier "returns the field v
 note, which rested on a transcription (`and eax,0x4100`) that does not exist at those addresses — and it also
 re-confirms the older `min(field,1.0)` claim was wrong in direction. Two more writer negatives added (zero absolute
 references to 0x10456924; no `[reg+0x28]` store among the 94 regions loading `[0x104568FC]`), so the tick's **unit**
-remains the single open unknown and kuluu's ×8 aim-scale label stands. Details: [movement.md](docs/movement.md) §11 M20.
+was the last open unknown about it; see M29 below. Details: [movement.md](docs/movement.md) §11 M20.
+
+**Closed 2026-10-03 [V] — M29, the frame tick's unit and its writer.** `[obj+0x28]` is written by the tail of the
+frame loop at **0x12A31** (EndScene/Present calls precede it; a `Sleep(1)` + `pause` re-measure spin gated on a
+divisor field follows it), and the value is an **integer count of 1/60 s**: raw = 60/fps, smoothed as the mean of a
+4-entry ring (× 0.25 @`.rdata 0x329CE4`), rounded, floored at `[obj+0x30]` — the **frame-rate divisor**, default
+**2 = 30 fps cap** — then clamped ≤ 20.0f (`and eax,0x4100`; this is that idiom's real home). Hence `Σ tick ≈ 60`
+per real second at any cap, which turns every per-tick coefficient in this layer into *coefficient × 60 per second*
+(focal zoom `tick × 6.0` → 360 focal/s) and makes countdowns integer frames (`[0x456D74] = 10` ≈ 0.17 s;
+`[0x456D7C] = 20` = 1/3 s, consumed at 0x1EEFE..0x1EF18). The clock is a sub-object at `[obj+0x1C]` (vptr
+**0x1032A118**, WINMM `timeGetTime`) with its advance/fps/scale slots verified, and the fps guard there is an
+*integer equality on whole milliseconds*, not a float clamp. Earlier writer hunts missed the store because the
+writer holds the object in `esi` for the whole body and the sweep assigns that fragment zero callers. kuluu
+consequence: the ×8 aim calibration (`CAMERA_CLIENT_SCALE`) exists only to stand in for this factor and comes out.
+Still open, named: the unit of `[cam+0x48]`, without which an aim rate cannot be stated in degrees — details
+[movement.md](docs/movement.md) §11c/§16.
 
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
 decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,
