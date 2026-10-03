@@ -775,9 +775,13 @@ times — @RVA 0xA6988 pre-integration on the steer/ease branch (paired with the
 angle survives a locked-animation tick. kuluu's fixed chain has this precedence already → no ordering change.
 
 **Standing research-open queue (order set by Shane)** — the first item (`[interp+0x9C]` producers) closed same
-day [V] (§14.5); still open: the follow-actor slot
-global **`[0x10487F74]`** (guarded by `mov ecx,[0x10487f74]; call 0x10081550; jne` @RVA 0xA7373 in the
-sibling heading writers, and neighbours `[0x10487F6C]`, `[0x10487F81/88/89]` seen in the facing fn); and fn **0x20446**.
+day [V] (§14.5); still open: fn **0x20446**.
+Also closed [V]: the "follow-actor slot" item — its framing was wrong. `0x10487F74` is a *static object instance*
+(all 26 refs are `mov ecx, OFFSET …`; nothing loads/stores through it), one of a family at
+`0x10487F58/+64/+74`, and its getter (RVA 0x81550) resolves **{u32 index into the global entity table 0x10480AF0;
+u32 identity stamp}** — re-checking the table entry, bit 9 of `entity+0x120`, and `entity+0x78 == slot+8` before
+returning `entity+0xA0`. Retail never caches a raw actor pointer for these. Facing is suppressed while such a slot
+resolves (fn 0xA7324 bails). Details: M28 in [movement.md](docs/movement.md).
 Closed since: the `0x85240/0x85270` candidate-iteration semantics (M14-bis, [movement.md](docs/movement.md) §7 — a find-first/find-next cursor over the actor draw list via link +0x54 from head global 0x1047D578, filtered by an IsKindOf test whose baked-in token names **CXiDollActor**).
 
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is

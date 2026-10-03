@@ -238,8 +238,8 @@ one read at 0xA6EA2 (`mov edx, [esi+0xe8]`). Writers beyond the `ret` belong to 
 (heuristic bounds fn 0xA7324..0xA73DD → **`fst [esi+0xe8]` @0xA73C9**; fn 0xA73DD..0xA7439 →
 **@0xA7431**), each entered through the same class dispatch and gated by the status chain
 (`0x84390` ∉ {edi,1,4,0x1c,0x1f}, then mount preds 0x84350/0x84370) plus free-run `[edx+0x330]`,
-with a follow-slot test `mov ecx, [0x10487f74]; call 0x10081550; jne` @0xA7373..0xA737F
-(that global is its own open research row — see summary §Where we are looking next).
+with a slot test `mov ecx, OFFSET 0x10487f74` (`b9 74 7f 48 10`) + `call 0x10081550; jne` @0xA7373..0xA737F
+(entity-reference slot object — resolved in M28 below).
 
 **M27 conclusions.**
 1. Retail's *authoritative* facing write is **post-integration and travel-derived**: when free-run
@@ -258,6 +258,42 @@ step in one system: authored base heading first (`authored_heading.unwrap_or(sel
 authored survives when not travelling, travel wins on a moving tick. Heading has exactly one
 writer in kuluu's player path (plus `rendered_heading_rad` for remote ActorRotation,
 `scheduler_runtime.rs:2486`).
+
+**M28 [local] — the entity-reference slots (`0x10487F58` / `+64` / `+74`), re-read 2026-10-05 [V].**
+Closes the "follow-actor slot" research item, and **refutes its original framing**: `0x10487F74` is not a
+pointer-holding variable. Every one of the **26** code references to it is `mov ecx, OFFSET 0x10487f74`
+(`b9 74 7f 48 10`) — the address of a *static object instance*, passed as the thiscall receiver; no instruction
+loads or stores through that address. Sibling statics of the same shape exist at `0x10487F64` (22 refs) and
+`0x10487F58` (15 refs), consulted by camera routines too (`call site 0x1F26B in fn 0x1F237`, near
+`UpdatePlayerFollowingCamera` 0x1EE60, and `0x20EF7` in fn 0x20DD4), so this is a small set of named
+*entity-reference slots*, not one variable.
+
+The resolution law (method **RVA 0x81550**, `this` = slot object; bytes `83 ec 0c / 56 / 8b f1 / 8b 46 04 /
+8b 04 85 f0 0a 48 10`) is a **validated index, not a pointer**:
+
+```asm
+mov eax, [slot+4]                        ; u32 index into the global entity table
+mov eax, dword ptr [eax*4 + 0x10480af0]  ; g_actorTable[index]
+test eax, eax; je fail                   ; empty slot
+mov ecx, dword ptr [eax + 0x120]; shr ecx, 9; test cl, 1
+je fail                                  ; entity validity bit: bit 9 of dword entity+0x120
+mov edx, dword ptr [eax + 0x78]          ; the entity's own identity stamp
+mov ecx, dword ptr [slot+8]
+cmp edx, ecx; jne fail                   ; stamp must match slot+8 (kills stale/recycled indices)
+mov eax, dword ptr [eax + 0xa0]          ; return the entity's +0xA0 actor pointer
+ret
+```
+
+So a slot is `{u32 index into g_actorTable; u32 identity stamp}` and resolving it re-checks both the table entry and
+the stamp before handing out an actor — retail never caches a raw actor pointer here. Bytes only for what the two
+fields *mean* per address (which slot is camera focus vs locked target vs follow): settling read is to enumerate,
+for each of `0x10487F58/+64/+74`, the writers of `slot+4`/`slot+8` (the pair-store at RVA 0xA609E/0xA60A3 writes
+`[0x10487f68]`,`[0x10487f6c]`, i.e. the +4/+8 of the slot based at `0x10487F64`) and read what each role's consumer
+is.
+
+Behaviour already readable from consumers: the heading-writer sibling fn 0xA7324 **bails out of writing facing**
+when a slot resolves non-null (`test eax,eax; jne 0x100a73dd`), and fn 0xA6A6D consults it twice (0xA6AAB, 0xA6AF3)
+— i.e. while such a reference is live, travel-derived facing is suppressed for the local player.
 
 ## 9. Camera follow (M11)
 
