@@ -107,7 +107,8 @@ Byte-verified this session against our `FFXiMain.unpacked.dll` (retail-2026-9, o
 - **MotionQueue_UpdateAllChannels = 0x1A420..0x1A660** (our function table seeds it; sole caller =
   `Model_AnimateAndPose`, call site 0x1002A27B). Every §4 queue/scratch claim checks out:
   - Globals pinned: pose scratch **0x1045F030**, stride **0x34** per bone (`add esi,0x34`);
-    blend scratch **0x1045B820**; mask array **0x1045F028**; bone-count global **[0x10462430]**.
+    blend scratch **0x1045B820**; mask array **0x1045F028** (this local address *is* DancingMad's
+    `g_pBoneMotionMask` `[web]` — name↔address alias pinned 2026-10-05, cite the local address); bone-count global **[0x10462430]**.
   - Queue layout: 5 base slots at `this+0x50` (stride 0x14) + pending-request list `this+0x34`
     (+0x3A entry array belongs to the policy descriptor, below); blend pair above `this+0x70`.
     Sampling order verified: index argument descends **4 → 0**, each active slot
