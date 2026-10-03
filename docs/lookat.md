@@ -100,7 +100,7 @@ needed more than that **[V(me), gates.out]**:
   (`movsx eax, byte ptr [eax+0xee]` @ 0x84407). The six sequential equality tests accept
   **{0, 1, 2, 6, 7, 8}**; any other value takes the release path — mode `−1.0` is written at 0xD5B9E for
   every frame that ends without a live target (suppressed or gated), then jumps to the tail.
-  No wire provenance for that byte has been located yet — see §B-port below.
+  Provenance census in §B-ter (2026-10-05).
 * `0x84390` = **own-status** predicate: returns sign-extended `byte[inner+0x170]` (@ 0x84397), same global
   fallback (`0x1047D60C`). That inner byte *is the wire ANIMATIONTYPE* — XIClient keeps it as the actor's
   GameStatus, and vendor `vendor/server/data/enums/animation.yaml` names every value in the chain below.
@@ -200,6 +200,42 @@ share and the authored limits that feed both are now byte-verified in **§E belo
 unlocated" framing in this section and in §C/§D is superseded by §E.
 
 ---
+
+## B-ter. The target-type byte `inner+0xEE` — gate chain re-read and writer census (pass of 2026-10-05, for gap row A6) **[V(me)]**
+
+The six-call predicate run at 0xD5BB8..0xD5BFB is re-verified verbatim: `ecx = edi` (**the target**) each
+time; every equality hit (`0`, `1`, `2`, `6`, `7`) jumps to **0xD5C01** and only the sixth test falls
+through — `cmp eax,8 / jne 0x100d5cae` @ **0xD5BFB** sends any non-member to the release tail. So:
+accept `{0,1,2,6,7,8}`, reject everything else **[V(me)]**. The own-status chain at
+0xD5C03..0xD5C5C matches §B as written (equals 0 / 0x2F → continue; `0x84330` `/sitchair`, `0x84350`
+==5, `0x84370` ==0x55 helpers; final miss jumps to the tail via `je 0xd5cae` @ **0xD5C5B** — polarity
+as recorded) **[V(me)]**.
+
+Writers of the byte (`tools/mem_operand_census.py --disp 0xEE`: 83 hits, 24 direct writes):
+every constant-stamping handler resolves the record through the **global entity table** first —
+`mov eax, dword ptr [idx*4 + 0x10480AF0]` (DancingMad §14 "Global actor table" **[web]**, confirmed by
+our reads) — taking `idx` from a word in its message buffer (`[esi+2]`, `[esi+8]`), then stores the
+type byte directly **[V(me)]**:
+
+| value | store sites |
+|---|---|
+| 0 | **0x95F67**, **0x95FC0**, **0x99C33**, **0x9C94F** (gated on `[+0x120] bit 5` + `word[+0x210]`) |
+| 1 | 0x9C96F |
+| 2 | const @ **0x9C9B7**, **0xAB23F**; and `mov byte ptr [esi + 0xee], 2` @ **0x95F94** in an update function |
+| 3 | **0x9CB72**, **0xC3F16** — that one immediately after the table slot itself is filled (`mov [esi*4+0x10480af0], eax`), a spawn-time stamp — and **0x1D2CFD** |
+| 4 / 5 | **0x9CC11** (via `[edx+0xee]`) and **0x9CC7E** |
+| 6 | **0x9CD47** (record from `word[esi+8]`; packet words at +0x32 also read) |
+| 7 | **0x9CDB1** and **0xB14AC** (the latter: record from `word[esi+2]`; followed by `or byte[eax+0xf4],1` / `cmp word[eax+0xfc]`) |
+| 8 | **0x9CE5D** (followed by `[+0xf6]=2` writes in sibling arms) |
+
+Variable stores (`mov [.. + 0xee], bl/cl/al` — value copied from the message/actor, not a constant):
+0x8A3E7, 0x95005, 0x9B02B, 0x9B162, 0xAB3D6, **0x1F844F** **[V(me) for each: raw bytes re-read]**.
+
+The observed constant range {0..8} matches XIClient's `ActorType` enum (`ZERO(0)…EIGHT(8)`, names
+`DOOR=3, LIFT=4, MODEL=5`) **[web]** — and §B's accepted set {0,1,2,6,7,8} excludes exactly
+type-3/4/5. So the target-type gate reads: *doors, lifts and models are never look-at targets*.
+Which message opcode reaches each handler is **[I]**; settling read = attribute each store site to its
+handler entry (tables_functions.csv seeds) and trace those through the packet dispatcher.
 
 ## B-bis. The `actor+0xB2` visibility/flag WORD — full `.text` census (pass of 2026-10-05, for gap row A1)
 
