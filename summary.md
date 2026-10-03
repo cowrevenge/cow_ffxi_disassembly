@@ -510,6 +510,12 @@ not just a number.
 
   keys come up the camera eases back toward the reference (the "catch-up" the user sees).
 
+  Law closed 2026-10-04: stored ref = axis·π/2·turn per facing event, consumer orbits look-at
+
+  by −ref ×6/max(dist,.01) while mode ≠ 0; the old "FPU-underflow / undecodable" claim was a
+
+  sweep artifact and is retracted (movement.md §11).
+
 - **Locked camera** [O + I]: when a target is locked the camera **focuses the target** and
 
   catches up smoothly (fast, ~≤1 s, bounded so it doesn't swing past the player); Q/E and

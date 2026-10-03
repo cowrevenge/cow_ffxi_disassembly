@@ -221,7 +221,8 @@ sub-state, and the W/S axis >= 0:
 Q_held = 0x25E100()  ; 0xA68DB : input mode == 1 (call 0x123EE0), axis6 >= 0,
                      ;          axis7 >= 0, SomeKeyCheck(0x3F, 0xA9, 4, -1)
 E_held = 0x25E170()  ; 0xA68D2 : same gate, key 0xAA instead of 0xA9
-turn   = Q_held - E_held            ; 0xA68E6
+turn   = E_held - Q_held          ; 0xA68E6 (fsubr computes m − st = [c] − st,
+                     ;           and [c] holds the 0x25E170/E result — earlier pass transposed)
 ```
 
 - auto-run && turn >= 0: the A/D axis slot is forced to **+1.0** (0xA68FB) and
@@ -315,9 +316,22 @@ predicate slot `[esp+0x1C]` == 0.0 and the mode != 0: it takes
 `angle = -[0x10456DB4]`, scales it x 6.0/max(dist, 0.01) when not free-run,
 zeroes it while the countdown (M20) > 0, arms the hold-off when 0, and rotates
 the look-at around the eye via `0x1EBB0(angle)` (the same routine as the dead
-arrow path, M19). **Unresolved:** the reference-angle expression at
-0xA692A..0xA6936 contains an FPU stack underflow (`fmul st(1)` on a
-one-element stack), so the stored value cannot be decoded byte-for-byte.
+arrow path, M19).
+
+*Correction 2026-10-04 (stream-order re-read from seed 0xA6240): the reference-angle
+expression IS decodable — the reported "FPU stack underflow" was an artifact of
+decoding started mid-expression at 0xA692A. In stream order two operands are live
+at `fmul st(1)` (0xA6934): `V = [esp+0x4c]` (axis-slot float spilled at 0xA64AF)
+was loaded on top of `turn`, the E/Q predicate difference computed at 0xA68E6. The
+fall-through expression is exactly M15's heading re-assignment —
+`heading = S + V·(π/2)·turn`, wrapped to ±π and stored to actor+0xE8 with the
+direction triple to +0xE4/+0xEC/+0xF0 (M10/M15). What the engage call 0xA6998
+stores as `[0x10456DB4]` is **only the product term `V·(π/2)·turn`**: written to
+`[esp+0xC]` at 0xA6936, loaded to eax at 0xA697E and passed arg-3 (mode=1,
+flag=ebp=0). A fully held key pair gives |ref| ≈ 1.5708 × 0.992 ≈ **1.558 rad**
+(M20 axis scale); the consumer turns that into an orbit rate via ×6/max(dist,0.01).
+The `.data` anchor block `0x35BBDC..` (target_track.md §5) is this function's
+default look-at source; it is not what arg-3 carries.*
 
 **M19 [local].** The left/right arrow yaw is **dead in this build**. The key
 slots `[esp+0x1C]`/`[esp+0x20]` are zero-cleared at 0x1EF30/0x1EF38 and then
@@ -365,6 +379,7 @@ Camera state block (all sites grep-verified):
 | 0x10456D88 | 0/8 counter (key 0x51 sets 8 @0x201D7) |
 | 0x10456D8C | 0/4 counter |
 | 0x10456D90 | global 3f vector used by the re-anchor body |
+| 0x10456DA0 | azimuth feedback: cam+0x48 += ([GetPos()]+4 − [0x456DA0]) under vt+0x19C (fn 0x1EE60 at 0x1F289..0x1F2AD, hold-off=10 armed on the compare); whole-file disp32 census: only this read + reset-stores-0 (0x1E661) — stored value constant in this build |
 | 0x10456DB0 | spring-back mode byte (M18) |
 | 0x10456DB4 | spring-back reference angle (M18) |
 
@@ -491,7 +506,7 @@ is in [target_track.md](target_track.md) §6.
 | M15 | [local] | Q/E turn keys rotate camera (cam+0x48 += tick·axis6·0.10666667, 0x1F0F2..0x1F147) and body (heading re-assign + SetDir 0x1E2F0, 0xA68D2..0xA6998) | §10 |
 | M16 | [local] | Device 0x3F actions: 4=W/S, 5=A/D (inverted), 6/7=Q/E pair; discrete 0xA9=Q, 0xAA=E | §10 |
 | M17 | [local] | Zoom/focal: ±tick·6.0 (0x32A3E8), clamps 900.0/242.0 (0x32A3D8/0x32A3D4); both keys snap to 350.0 via byte 0x10456D84; wheel same path; store 0x15290→cam+0x2F8 (old M17 "pitch 23/10/15" was a XIClient leak — §11) | §11 |
-| M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; angle expression FPU-underflowed | §11 |
+| M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; stored ref = axis·π/2·turn — the "underflow" claim is retracted (correction §11) | §11 |
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
 | M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); held Q/E ≈ 0.1058 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
 
@@ -516,8 +531,9 @@ is in [target_track.md](target_track.md) §6.
   focal/s, clamps 900/242, both keys snap to 350, M17); it is zoom, not
   pitch, and needs replacement, not tuning. The left/right arrows have no
   retail rate in this build (M19).
-- Spring-back exists in retail (M18) but its reference-angle expression is not
-  decodable (FPU stack underflow); documented, not ported.
+- Spring-back exists in retail and is fully byte-decodable (M18, corrected:
+  stored ref angle = axis·π/2·turn per facing event; consumer orbits look-at by
+  −ref ×6/max(dist,.01) while mode ≠ 0). Documented, not ported.
 - Airborne movement is quartered (M8); contact with another player within ≈6.3 yalms
   blocks the step for a 30-tick countdown (M9/M14).
 
@@ -529,6 +545,7 @@ is in [target_track.md](target_track.md) §6.
 - 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
 - The tick write site for `[0x104568FC]+0x28` (M20): indirect; not findable statically.
-- Spring-back reference-angle expression (M18): FPU stack underflow at 0xA692A..0xA6936.
+- ~~Spring-back reference-angle expression (M18)~~ — **closed 2026-10-04**: no
+  underflow; stream-order decode in M18's correction.
 - Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).
 - Fn 0x20446 (countdown = 20.0 @0x20769) has 0 direct callers - presumably vtable-dispatched.
