@@ -516,6 +516,8 @@ not just a number.
 
   sweep artifact and is retracted (movement.md §11).
 
+- **Mouse aim** [V, closed 2026-10-04 (M21–M23)]: **position-based**, not delta-based — anchor→cursor offsets normalized toward screen edges (saturating at ±1), `atan2−π/2` state angles, then emitted as **virtual arrow-key presses** (ids 0x16–0x19, tick-ramped counter) into the same integration the keyboard uses; steering mode quantizes cursor direction to **16 compass sectors**. No rad/px sensitivity constant exists in this build.
+
 - **Locked camera** [O + I]: when a target is locked the camera **focuses the target** and
 
   catches up smoothly (fast, ~≤1 s, bounded so it doesn't swing past the player); Q/E and
@@ -758,6 +760,14 @@ element list at `[actor+0x674]`; `0x62`/case 96 queues a one-shot scripted yaw t
 duration fetcher's scale is interpreter field +0x9c (§14.2). Named reads remaining in this region:
 producers of `[interp+0x9C]`, the gates `actor+0x7A4`/`actor+0x86C`, and the `actor+0x620` facing sites
 (RVA bands {0x58XXX}, {0x8FC00..0x92300}).
+
+*Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
+decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,
+movement.md §11 correction); today's whole-file E8 scan re-verified M18's caller census byte-exact
+(six sites in the facing fn 0xA65CB + one camera-state reset call at 0x1E685). **C3** — mouse aim law closed:
+position-based offsets → `atan2−π/2` → virtual arrow presses 0x16–0x19 (+ 16-sector steering);
+no rad/px sensitivity exists in this build (movement.md §10a, M21–M23). No open DLL read remains
+for any gaps row except B4's ruling-gated items.
 
 **The head limit/slew/tug — now with a better lead than "somewhere in the curves".** The D pass
 

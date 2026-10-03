@@ -254,6 +254,40 @@ Discrete key checks ride the same device via 0x123A70 (SomeKeyCheck):
 raw key holds 0x8B/0x8C through 0x193850 (0x1EF67, 0x1EF86) on the degenerate
 1.6° path.
 
+## 10a. Mouse aim and steering (M21–M23)
+
+**M21 [local].** Mouse input object `[0x104E1D4C]` keeps an anchor/cursor pair:
+cursor at `+8/+0x3C`(x) and `+4/+0x38`(y), screen rect globals
+`[0x106218B4..BA]`. Normalized offset accessors clamp toward the edges:
+X `0x125FE0`, Y `0x126100`: `offset = Δpx × (1/21 @0x32DF9C) ÷ screen-extent`,
+saturated to **±1.0** (`1.0 @0x32961C`, `-1.0 @0x32A3F0`); Y sign-flipped.
+Raw float state fields: getters 0x1260D0 (+0x8C), 0x1260C0 (+0x90), 0x1260F0
+(+0x94), 0x1260E0 (+0x98). **There is no per-pixel radian sensitivity anywhere
+on this path — aim is absolute cursor position, not mouse-motion deltas.**
+
+**M22 [local].** Steering law `0xA77A0` (consumed by the walker at 0xA665A when
+CFsConf6Win and bit `([mouse]+0x58 >> 2) & 1`, results into the axis slots and
+`[mouse]+0xA8` float / `+0xAC=1`): from (nx, ny) = M21 offsets —
+θ = fpatan(ny, nx); sector = round(((θ + π)/(2π) + 1/32) × **16**) & 0xF
+(constants π @0x32DF98, 1/2π @0x32DF94, 1/16 @0x32A9F0, 2π @0x32DF90,
+round-to-int 0x311C2C); out = (cos, sin, sector·(1/16)·2π − π). i.e. the
+cursor direction is quantized to **16 compass sectors**. Degenerate guard: both
+offsets saturated ⇒ returns false.
+
+**M23 [local].** The mouse-aim dispatcher (seed 0x125360, state byte
+`[mouse]+0x4D`) gates on device-group **0x3E** button queries {0x8B, 0x96} and
+CFsConf6Win. Position branch: θ = fpatan(offset pair) − (π/2 approx @0x32D430),
+wrapped into ±π, stored in state global `0x1036E5F4` (accessor offsets) or
+`0x1036E634` (raw field deltas); zero-offset special case stores −(π/2 approx)
+and sets word `[mouse]+0xA6 = 0xC`. Both globals are read **only inside this
+handler** (whole-file disp32 census). The tail converts θ to **virtual action
+presses 0x16–0x19** (`push id; call 0x15DD00`, 0x125B87..0x125BEF) through a
+tick-driven counter ramp (round@0x311C2C, imul accumulator with compare clamps
+0x125C5A..0x125CA2 — rate semantics [I]). **Mouse aim therefore terminates in
+virtual arrow-key actions**, which the M15/M19/M20 keyboard integration then
+consumes — one more reason kuluu should not model mouse and arrows as separate
+scales (gaps C3, C2).
+
 ## 11. Camera zoom (focal), arrow yaw, spring-back, and the tick (M17–M20)
 
 **M17 [local].** Camera **zoom (focal length)** is integrated in the
@@ -509,6 +543,9 @@ is in [target_track.md](target_track.md) §6.
 | M18 | [local] | Spring-back: mode 0x10456DB0 + angle 0x10456DB4, setter 0x1E2F0, consumer 0x1F14D..0x1F255; stored ref = axis·π/2·turn — the "underflow" claim is retracted (correction §11) | §11 |
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
 | M20 | [local] | Tick = seconds (0x14CF0, write site indirect); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); held Q/E ≈ 0.1058 rad/s; state block 0x10456D70..0x10456DB4 | §11 |
+| M21 | [local] | Mouse input object `[0x4E1D4C]`: anchor/cursor fields, ±1 edge-saturated normalized offsets (1/21 scale @0x32DF9C), screen rect `[0x106218B4..BA]`; position-based aim, **no rad/px sensitivity** | §10a |
+| M22 | [local] | Steering 0xA77A0: cursor angle quantized to 16 compass sectors (round&0xF), cos/sin+sector out into walker axes | §10a |
+| M23 | [local] | Mouse-aim dispatcher seed 0x125360 (device 0x3E buttons {8B,96}): θ=fpatan−π/2 state globals 0x1036E5F4/634 → virtual presses 0x16–0x19 with imul rate ramp; feeds the M15/M20 keyboard integration | §10a |
 
 ## 15. Kuluu conclusions (for the walker rework)
 
