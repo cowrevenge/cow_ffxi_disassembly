@@ -129,4 +129,25 @@ equipment; equipped items spawn parented to the actor root (`dat_vos2.rs:2248-24
 `standard_joint_world_position` (`skeleton_instance.rs:306-315`), which must be read **after** `advance_actor_pose`
 (live pose loop ends at :4892 in `tick_live_ffxi_actors`). Battle dedup: `pose_clip_matches` overlay-first then
 primary, keyed on exact chunk id (:2317-2330); per-slot registration `[Option<(DatId,bool)>;8]` (:3092-3112). Known
-caveat in tree: non-PC skeletons can resolve hand refs near the root (`skeleton_instance.rs:388-391`).
+caveat in tree: non-PC skeletons can resolve hand refs near the root (`skeleton_instance.rs:388-391`).
+
+### G.4 P1 measured result — the parse-offset hypothesis is DEAD, the data is fine (2026-10-05)
+
+Dumped with kuluu's own parser over the whole install (`ffxi-dat` example, `jw-stack-815 36d5ef48`, now
+prefix-filterable): Mithra skeletons carry prefix **`mit`** and **59 of 64 author a non-zero record 0**; Hume
+(`hum`) 70/71, Tarutaru (`tar`) 68/70. Sampled detail, identical shape across the humanoid races:
+
+    hum_  ROM/309/21.DAT  records=[(0.24,0.16,0.5), (0.16,0.06,0.5), (0,0,0.5)]  bend slot 3 -> joint 51 parent=50 children=[52]
+    tar.  ROM/309/126.DAT records=[(0.24,0.16,0.5), (0.16,0.06,0.5), (0,0,0.5)]  bend slot 3 -> joint 6 parent=5 children=[7]
+
+So P1 (a)-(d) are all cleared: gate not inverted, leg-split path doesn't skip the pass, joints come from
+`references[slot].index`, and no per-race offset bug — which also retires the old "tarutaru/goblins author no
+bend" claim for good (it was a bad search, as suspected).
+
+**Where P1 now points** (`ffxi-actor/src/look_bend.rs:141-190`, `rotate_about_pivot` :165-208): each record is
+applied as a **rigid subtree rotation**, in record order, so for Hume record 0 rotates joint 51 (neck) and then
+record 1 rotates joint 50 (chest) *including* the neck it just bent. The head therefore has no independent
+turn left to show: whatever visible motion exists comes from the chest/shoulder subtree. That matches "shoulders
+turn, head doesn't" exactly. Next step is a retail-grounded reading of how the two bends compose (nested parent-
+child re-composition rather than two overlapping rigid subtree rotations), not another constant and not a
+head-only special case.
