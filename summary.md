@@ -757,9 +757,12 @@ top-ranked carriers' handlers (§14): `0x28`/case 38 writes authored transition 
 element list at `[actor+0x674]`; `0x62`/case 96 queues a one-shot scripted yaw turn (pending pair
 {`actor+0x870 = |Δ|`, `actor+0x874 = signed Δ`} applied once into accumulator `actor+0x620`, cleared at RVA
 0xC67D4). Neither touches clip selection — the idle↔walk seam fix stands as landed without them. The
-duration fetcher's scale is interpreter field +0x9c (§14.2). Named reads remaining in this region:
-producers of `[interp+0x9C]`, the gates `actor+0x7A4`/`actor+0x86C`, and the `actor+0x620` facing sites
-(RVA bands {0x58XXX}, {0x8FC00..0x92300}).
+duration fetcher's scale is interpreter field +0x9c (§14.2). Closed 2026-10-05 by re-read **[V]**
+(§14.3): the consumer gates (`+0x7A4 == -1`, nesting counter `+0x86C` with its accessors and ctor defaults),
+the producer that queues the pending pair (fn 0x5AF2C, script-context gated, heading Δ from the §13 record via
+vtable `0x1C0`), and the `actor+0x620` facing-site bands — those sites **only wrap-normalize**; `+0x620` is
+component 1 of a second angle set (`+0x61C..+0x628`) whose consuming method (0xC817A, virtual) is still
+unresolved. Remaining named read in this region: producers of `[interp+0x9C]`.
 
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
 decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,

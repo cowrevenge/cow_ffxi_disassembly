@@ -758,17 +758,81 @@ The consumer law lives in the actor update code at region RVA `0xC66AF..0xC67DA`
   alongside the parameter block (+0x7C4..+0x8C4, incl. `[+0x7D4] ← bits 0x3F6C7462` ≈ 0.924), and ctor
   `0xAC8E0` (vtable `.rdata 0x32FD58`) re-zeroes +0x870/+0x874 while setting actor flag bytes +0xB0=1,
   +0xB2 |= 4 — confirming the fields ride on the same actor/model class as §13's driven object.
-- `actor+0x620` itself is fld/fstp'd in facing-computation clusters at RVA bands `{0x58XXX}` and
-  `{0x8FC00..0x92300}` — read there, laws of those sites unread (named, not guessed).
+- `actor+0x620` was flagged from facing-computation clusters at RVA bands `{0x58XXX}` and
+  `{0x8FC00..0x92300}`. Those sites are now read: **they normalize, they do not consume**
+  (§14.3 census) — the band hits are all the ±π/2π wrap idiom on `+0x620`/`+0x624`.
 
-### 14.3 Consequences for kuluu **[I]**
+### 14.3 Gate + producer census (re-read byte-for-byte in this build, 2026-10-05) **[V]**
+
+The consumer region read verbatim (`esi` = the actor/model object that also carries §B-bis's `+0xB0`/`+0xB2`
+and §13's driven record):
+
+```
+0xC66AF  83 be a4 07 00 00 ff    cmp dword ptr [esi+0x7a4], -1
+0xC66B6  0f 85 8e 08 00 00       jne epilogue 0x100c6f4a      ; authored turn applies only while +0x7A4 == -1
+0xC66BC  8b 86 6c 08 00 00       mov eax, [esi+0x86c]         ; enable counter
+0xC66C4  0f 84 15 01 00 00       je 0x100c67df                ; 0 -> the other branch (vt[+0x304]/[+0x340] probes)
+0xC66CA  d9 86 70 08 00 00       fld dword [esi+0x870]        ; |Δ|
+         d8 1d d8 95 32 10       fcomp [0x103295D8]           ; (= 0.0) -> queued magnitude 0 skips
+0xC66E3  d9 86 74 08 00 00       fld dword [esi+0x874]        ; signed Δ
+0xC66E9  d8 86 20 06 00 00       fadd dword [esi+0x620]       ; accumulator += Δ   (ONE shot)
+         wrap triple: [0x10329D30] = 3.1415f, [0x10329D2C] = 6.283f, [0x10329D28] = -3.1415f
+0xC67CE  d9 05 d8 95 32 10       fld dword [0x103295D8]
+0xC67D4  d9 9e 70 08 00 00       fstp dword [esi+0x870]       ; clear pending magnitude, then epilogue
+```
+
+Field ownership and defaults (ctor region `0xC627F..`): `+0x86C`/`+0x870`/`+0x874` zeroed at
+**0xC6287/0xC628D/0xC6293**, and `[esi+0x7a4] = -1` at **0xC62D6**. So out of the factory the consumer is
+*enabled on +0x7A4 but disabled on +0x86C*: the pending turn cannot apply until something increments that
+counter.
+
+Other writers of `+0x7A4`: from a caller argument at **0x6201A** (`mov [esi+0x7a4], ecx`, `ecx = [esp+0x20]`),
+a `-1` store through a getter-returned object at **0x61F6E**, and an `ebx` store in the update epilogue region
+at **0xC70E6** (ebx origin untraced — settling read: the window above 0xC70D3).
+
+Enable-counter accessor **0xD5490** (`thiscall`, byte arg): `arg == 1 -> ++[this+0x86c]`; `arg == 0 ->` decrement
+only while `[this+0x86c] > 0`; any other value is a no-op — a nesting counter, not a flag. Two callers:
+**0x5AF7D** (`push 1`, from the producer below) and **0x60F5E**, where no argument push is visible in stream
+order (settling read: that call site's own prologue/arg provenance). Named accessors beside it at
+**0x5E7C0** (`mov [ecx+0x870], eax`) and **0x5E7D0** (`mov [ecx+0x874], eax`); neighbours 0x5E7B0 returns
+`[ecx+0x800]`, and **0x5E7E0** is a read-modify-write setter of bit 22 of `[ecx+0x840]` (the §B "hold" word).
+
+Producer — function **0x5AF2C..0x5B0C8**, no direct callers; its VA appears as a stored pointer in the
+embedded pointer array around RVA `0x5DD80..0x5DDD0` and in a lone data cell at **0xBC2B38**. Read law:
+
+* allocates a 0x78-byte object (`push 0x78; call 0x1005E040`) and pulls both interpreter/script-context
+  getters `0x62770` and `0x627D0`; if either is null it bails to `0x5AC96` — the turn only ever queues while a
+  script context exists (ties to §14.2's duration factor +0x9C).
+* `push 1; call 0xD5490` on that object -> increments its `+0x86C`, which is what unlocks consumption above.
+* target angle read through vtable slot `[edx+0x1C0]`, then `Δ = want - [eax+4]` — component 1 of the §13
+  angle record, i.e. the heading; wrapped into ±π with the same triple used by the consumer.
+* stores `fabs(Δ)` via **0x5E7C0** (at 0x5B08F) and the signed Δ via **0x5E7D0** (at 0x5B0B6), negating when the
+  zero-compare at 0x5B098 flags (`fcomp [0x103295D8]`).
+* an unnamed factor: value from vtable `[ebx+0x1BC]` scaled by `fmul [0x1032A9F4]` (identity unread).
+
+What consumes the accumulator — census of displacement `0x620`: 160 touches in `.text`, and **all but a
+handful are this wrap-normalization** (`fld/fcomp triple; fsub|fadd [0x329D2C]; fstp`) repeated across ~10
+class variants (bands `0x145E1`, `0x4753F/0x479B8`, `0x58103`, `0x8FC5E`, `0x91157`..`0x92A6A`, `0xAB7B9`,
+`0xC6B7C`, `0xCA2CE`, `0xCAFA5`). The field is component 1 of a **second** angle set `+0x61C..+0x628`: the ctor
+at **0xC5E72** seeds it from globals `[0x1035D6B4]/[0x1035D6B8]/[0x1035D6BC]` while passing `lea eax,[esi+0x61c]`
+next to `lea edi,[esi+0x44]`, so both the §13 driven record and this one live on the same object. The only
+non-wrapping reads are copies at **0xC8311** (with siblings +0x61C/+0x624) inside virtual method
+**0xC817A..0xC83AE**, which packs them through the `0x27B80/0x27BD0/0x27C20` setter family; that method has no
+direct callers and its VA is not present as a stored pointer, so its vtable/slot is unresolved [I] (settling
+read: locate the slot by walking `.rdata` pointer runs for the class whose ctor installs 0xC817A's neighbours).
+**Consequence:** the `0x62` pending-pair plumbing is fully specified and portable; where the accumulated angle
+lands in composed facing is not, so porting it now would mean inventing kuluu's landing site.
+
+### 14.4 Consequences for kuluu **[I]**
 
 - D4's question (“carriers feeding the idle↔walk seam”) answers **no clip machinery**: `0x28` writes
   transition parameters onto the +0x674 element list; `0x62` queues a one-shot yaw offset. The seam fix
   (D1) stands as landed without them.
-- If kuluu ever dispatches these stages: `0x62` = pending-Δ pair applied once into a yaw-offset field
-  that must feed facing composition; `0x28` needs the element-list parameter semantics decoded further
-  before it means anything here. Both now have schemas, so neither is an unknown carrier anymore.
+- If kuluu dispatches these stages: `0x62` = pending-Δ pair (`|Δ|`, signed Δ) + enable-counter bump, applied
+  once into the actor's second angle set `+0x620` under the §14.3 gates — everything needed except which
+  consumer composes facing from that set (§14.3 last paragraph). `0x28` needs the element-list parameter
+  semantics decoded further before it means anything here. Both now have schemas, so neither is an unknown
+  carrier anymore.
 - §12's duration factor is closed as interpreter field +0x9c; reproducing retail durations exactly will
   need that producer eventually.
 
