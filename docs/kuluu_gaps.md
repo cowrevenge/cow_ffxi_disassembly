@@ -193,7 +193,7 @@ Landed `kuluu 476ea336` (`carry_unkeyed_channels`, `FfxiRenderActor::pose_local_
   `kuluu c474e170`.
 - `kuluu/src/view_native/input.rs` — the one-shot `lock_aimed` field + its per-target clearing block: state for a
   rule M32 showed to be wrong-by-timing, deleted with an explanation of what replaced it (not silently).
-- `kuluu/src/view_native/camera_collision.rs` — comment claiming the lock turn owns the yaw *and* that "the turn
+- `kuluu/src/view_native/camera_collision.rs:317-321` — a comment that said only “while locked it writes nowhere… the lock turn owns the yaw”, giving no reason why that value must not be the spring reference; the missing reason is what let P2’s self-feedback be written. It now cites M32 (the one global this consumer mirrors is walker-produced). `kuluu 47c04496` (comment-only, after the exe build).
   keys do nothing in lock mode" while the same block fed its own correction back as the spring reference; the two
   comments now describe what the code actually consumes.
 
