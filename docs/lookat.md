@@ -265,3 +265,42 @@ rec=[struct.unpack_from('<3f', chunk_body, refs_end+0x48+12*i) for i in range(3)
 Scratch tools for this pass: `w1_accessor.py`, `w5_bend.py`..`w8_clamp2.py`, `w9_limits_scan.py`,
 `w10_race.py`/`w12_racevar.py`, `w13_callsites.py`, `w14_bendcaller.py` (session scratchpad; the reusable
 chunk-walk + record read belongs in `tools/dat_stage_scan.py` next time someone touches this).
+
+### E.5 — what the clamp's arguments actually are (read 2026-10-01 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+Needed before kuluu ports row 3, because §E.2 left "which plane, and what is `scale`" as **[I]**. Bytes:
+
+```
+0x2aeaa  lea esi,[esp+0xb0]; mov ebx,2            ; two-entry loop, stride 0x10 (one per bend record)
+0x2aebc    call 0x32a40                           ; fills each entry; runs exactly twice, before the record pass
+...
+0x2aed9  lea ecx,[edi+8]; call 0x35270            ; record index -> {xlim,ylim,scale}
+0x2aee3  fld [ecx]/fcomp 0 / fld [ecx+4]/fcomp 0  ; either limit ≤ 0 ⇒ skip this record (bone does not bend)
+0x2af06  push ecx(record); push [esp+0x74]; push [esp+0x30]; push [esp+0x88]; mov ecx,edi; call 0x2b140
+
+0x2b150..0x2b1a7                                  ; basis built from a caller-supplied frame (two axis arrays
+                                                   ;   initialised identity-ish: quat (0,0,0,1) + axes (1,0)/(0,1))
+0x2b1bd  call 0x282c0                             ; *** column-major mat4 × vec3, NOT a plane projection: ***
+                                                   ;   out.x = m[0]vx + m[0x10]vy + m[0x20]vz   (y,z rows at +4/+8)
+0x2b1cb  push 2.0f; call 0x272b0                  ; scale-by-two helper on the transformed vector
+0x2b1d8..0x2b212                                  ; xlim guard: ≤0 -> 0.001 (`0x3a83126f`); ylim guard likewise
+0x2b21d  branch on (xlim <=> ylim):
+           u *= xlim/ylim     (aspect-normalise one component, chosen by the bigger axis)
+           v *= ylim/xlim
+0x2b253  test w (=third component) > 0:
+           w > 0 : k = 1.0/w      (`0x1032961c` = 1.0f)   ; u,v *= scale * k     -> offsets per unit depth
+           else  :                u,v *= scale * 100.0f   (`0x1032a3c8`)          -> target behind the plane, pushed out
+0x2b2a0  R = hypot(u,v); compared to a limit; over-limit path:
+           fpatan @0x2b2bd -> θ; [out]=cosθ·limit, [out+4]=sinθ·limit; w written as 1.0; `scale` stored at [out+8]
+```
+
+So the ellipse acts on **the two in-plane components of the look offset after it has been put through a per-entry matrix**, and — when the point is actually in front (`w > 0`) — normalised by that depth: retail limits an *angular* region expressed as offsets-per-unit-depth, with `scale × 100` reserved for the behind-the-plane case. Component ↔ axis pairing is **u ↔ xlim, v ↔ ylim**.
+
+Constants confirmed: `0x103295d8 = 0`, `0x1032a22c/0x3a83126f = 0.001` (guard), `0x1032961c = 1.0`, `0x1032a3c8 = 100.0`.
+
+**Still open before a kuluu port (named, cheap):**
+* which matrix the per-entry frame at `[esp+0x88]/[esp+0x30]` is — read the two-entry builder `0x32a40` and the basis call `0x2d8141`, since that decides whether xlim/ylim land on the bone's own axes or the actor's;
+* what the hypot compares against exactly (which of {xlim, ylim} after aspect-normalisation) — trace FPU stack depth from `0x2b253`;
+* the `push 2.0f` helper `0x272b0` (scale-by-2 on which component).
+
+Nothing here changes §B/§E.1–E.4; it pins down the shapes E.2 left open and lists exactly what a port still has to read.
