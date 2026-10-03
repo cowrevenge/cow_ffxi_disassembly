@@ -169,6 +169,33 @@ misread; the entity's live position is at **+0xD4** (M14). The 0x015 POS reporte
 0x983F0 (called from the per-tick local-player scan at 0x969F4) therefore reports the
 same +0xD4 triple.
 
+**M14-bis [local] — what the candidate iteration actually is, re-read byte-for-byte 2026-10-05 [V]**
+(closes the "iteration semantics" research item for `0x85240` / `0x85270`; both helpers sit in one code block
+RVA 0x85220..0x85296, and the sweep mis-bounds them as functions starting at 0x851DE — those bytes are padding,
+not code):
+
+- **`0x85240` = find-first over the actor draw list.** `mov esi, dword ptr [0x1047d578]` (the depth-sorted draw-list
+  head global; pipeline-map §6.1 names the same address), then per node: push the filter token, `call 0x1002c8f0`,
+  `test al,al; je return_node`; otherwise advance `esi = [esi + 0x54]` (the list's *next* link) and repeat. Returns
+  0 when the list ends.
+- **`0x85270` = find-next with the same filter**: identical body except it starts from `[ecx + 0x54]` — so callers
+  drive it as a cursor (first, then next-of-last-hit). Both use link field **+0x54**, matching §6.1's `next`.
+- **The filter (`0x2C8F0`) is an IsKindOf test, not a flag read**: `mov eax,[ecx]; call dword ptr [eax]` (virtual
+  slot 0 returns the node's class-info pointer), then compare against the queried token, and if unequal climb
+  `[eax + 8]` repeatedly (`cmp eax,token; je true` / `jne loop`) until null → false. So a match includes derived types.
+- **The queried type is baked into the helpers:** the token pushed by both is `.rdata` VA **0x1032F910**, whose first
+  dword points to RVA 0x35BD78 = ASCII **"CXiDollActor"** (followed by `u32 0x440`, i.e. the class size, then more
+  pointers). Because the token is an immediate inside the helpers, *every* one of their callers queries that same
+  class — which is exactly why M14 read candidates as "player-shaped actors".
+- Same block also holds a **tail-of-list getter** at **0x85220..0x85238** (`ret` @0x85238): walks head→last node over
+  +0x54 and returns it, or 0 for an empty list.
+- Caller census (whole `.text`): 20 call sites of `0x85240`, 19 of `0x85270`. M14's contact gate is among them —
+  query at **RVA 0xA87BD** and cursor at **RVA 0xA8908**; note the enclosing routine actually begins at
+  **RVA 0xA8748**, not the 0xA8770 the §7 text quotes (0xA8770 is inside it).
+
+Consequence: no kuluu change needed for correctness of M14 as recorded, but any port of the contact gate inherits
+this *type filter* — retail does not scan "all actors", it scans the draw list for `CXiDollActor`-shaped ones.
+
 ## 8. Facing update (M10)
 
 **M10 [local].** After integration, when free-run and moving:

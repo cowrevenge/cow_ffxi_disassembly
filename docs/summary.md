@@ -777,8 +777,10 @@ angle survives a locked-animation tick. kuluu's fixed chain has this precedence 
 **Standing research-open queue (order set by Shane)** — the first item (`[interp+0x9C]` producers) closed same
 day [V] (§14.5); still open: the follow-actor slot
 global **`[0x10487F74]`** (guarded by `mov ecx,[0x10487f74]; call 0x10081550; jne` @RVA 0xA7373 in the
-sibling heading writers, and neighbours `[0x10487F6C]`, `[0x10487F81/88/89]` seen in the facing fn); the
-`0x85240 / 0x85270` candidate-iteration semantics from M14; and fn **0x20446**.
+sibling heading writers, and neighbours `[0x10487F6C]`, `[0x10487F81/88/89]` seen in the facing fn); and fn **0x20446**.
+Closed since: the `0x85240/0x85270` candidate-iteration semantics (M14-bis, [movement.md](movement.md) §7 — a
+find-first/find-next cursor over the actor draw list via link +0x54 from head global 0x1047D578, filtered by an
+IsKindOf test whose baked-in token names **CXiDollActor**).
 
 *Also closed 2026-10-04 (camera/input side):* **C4** — M18's spring reference-angle expression is
 decodable (the "FPU underflow" was a mid-expression sweep artifact; stored ref = axis·π/2·turn,
