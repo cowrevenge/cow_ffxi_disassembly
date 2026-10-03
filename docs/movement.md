@@ -406,6 +406,12 @@ flag=ebp=0). A fully held key pair gives |ref| ≈ 1.5708 × 0.992 ≈ **1.558 r
 The `.data` anchor block `0x35BBDC..` (target_track.md §5) is this function's
 default look-at source; it is not what arg-3 carries.*
 
+*Addendum 2026-10-05 (device-table sub-question, still open):* no `push 0x3e` / `push 0x3f` immediate
+pair marks the button/key slots from outside — every such hit in `.text` is a float constant
+(`0x3E800000` = 0.25f, e.g. 0xA62A2/0xA6E3D/0xA7739 inside and beside the control fn), so the device id
+and slot numbers of M1/M20 reach their accessors another way (registers or table data) and the
+{0x8B, 0x96} button identity + {0x4F, 0x50} key-slot identity remain **[I]**.
+
 **M19 [local].** The left/right arrow yaw is **dead in this build**. The key
 slots `[esp+0x1C]`/`[esp+0x20]` are zero-cleared at 0x1EF30/0x1EF38 and then
 only multiplied by -1.0 (@0x32A3F0) while keys 0x8B/0x8C are held
@@ -414,16 +420,53 @@ only multiplied by -1.0 (@0x32A3F0) while keys 0x8B/0x8C are held
 6.0/max(dist, 0.01)) therefore always rotates by 0. There is no retail
 left/right arrow yaw rate in this build to port.
 
-**M20 [local].** The frame tick: **0x14CF0** returns
-`min([0x104568FC]+0x28, 1.0)` with NaN -> 1.0. The unit is **seconds**,
-decided by the Q/E azimuth feel (0.10666667 × tick ≈ 0.1°/frame at 60 fps,
-a plausible held-key orbit rate) and
-consistent across 215 call sites in 170 functions. The write site for
-`[0x104568FC]+0x28` is not statically findable (register tracking with
-reassignment, lea, thiscall setters, and tiny thunks all came up empty), so the
-tick's origin is indirect. Consequence: the `round(tick)` sub-loops (history
-loop 0x1F667, re-anchor loop 0x1FA4F..0x1FE88) run **zero iterations** at a
-normal frame rate - they are stall-recovery machinery, not per-frame work.
+**M20 [local].** The frame tick: **0x14CF0** returns the field
+`[0x104568FC]+0x28`. *Re-read 2026-10-05, and this narrows what the getter can be used to claim —*
+the twin getters `0x14CF0` and `0x14D20` are byte-identical in shape:
+
+```
+0x14CF0  a1 fc 68 45 10     mov  ecx, [0x104568fc]        ; camera object
+0x14CF6  d9 41 28           fld  dword [ecx + 0x28]
+0x14CF9  d8 1d 1c 96 32 10  fcomp dword [0x1032961c]       ; = 1.0f (raw 00 00 80 3f)
+0x14CFF  df e0              fnstsw ax
+0x14D01  25 00 41 00 00     and  eax, 0x4100               ; keeps bit 8 (C0) + bit 14 (C3)
+0x14D04  7a 07              jp   0x10014d0d                ; -> fld [ecx+0x28]; ret
+0x14D06  d9 05 1c 96 32 10  fld  dword [0x1032961c]        ; 1.0f
+0x14D0C  c3                 ret
+```
+
+As encoded, `jp`'s parity comes from the **low byte** of the mask result, and both retained bits
+(C0 = bit 8, C3 = bit 14) live in AH — so AL is always 0, PF is always set, and the jump to
+`0x14D0D` (`fld [ecx+0x28]; ret`) is unconditional: **the getter returns the field verbatim and the
+`fld [1.0]; ret` arm at 0x14D06 is unreachable.** The NaN-aware form this build uses elsewhere is
+the byte-valued `test ah, 0x5/0x41; jp` (e.g. 0xC6722, 0xA6E37), where the tested value is a byte and
+PF really means C0/C2/C3 parity — that idiom *is* a NaN guard, but it is not what these getters encode.
+So M20's earlier `min(field, 1.0)` with `NaN -> 1.0` reading cannot be defended from this code as written,
+and **nothing in the getter establishes either an upper/lower bound or a unit for the tick.** What
+*is* byte-solid (re-read same day) is how the tick is used, the M15 orbit integration:
+
+```
+0x1F0F2  e8 f9 5b ff ff   call 0x10014cf0          ; tick
+0x1F0F7  d8 4c 24 24      fmul [esp + 0x24]        ; × the steer/axis term (fnA 0x120C70's axis, ≤ 127/128)
+0x1F0FF  d8 0d e4 a3 32 10 fmul [0x1032a3e4]       ; × 0.10666667f
+0x1F147  d8 47 48         fadd [edi + 0x48]        ; camera azimuth += delta   (ONE add per frame)
+0x1F14A  d9 5f 48         fstp [edi + 0x48]
+```
+
+i.e. retail's live camera-orbit law is **one accumulation per frame**, `tick × axis × 0.10666667 rad`;
+the scalar unit of `tick` (and therefore the degrees/second) is still **[I]**, and that single unknown is
+what every aim-rate calibration in kuluu stands on.
+Writer hunt for `[camera+0x28]`, this pass: register-pairing sweep (`mov reg,[0x104568fc]` …
+`[…reg+0x28] =`, tool `tools/store_after_global_load.py`) returns no object store — only the two getter
+reads and one unrelated word store; intersecting "sweep regions that load the camera global" with
+stores to `[any reg + 0x28]` yields exclusively `[esp + 0x28]` stack slots. Combined with the older
+negative results (register tracking through reassignment/lea/thiscall setters/thunks), the tick's origin
+stays indirect and named: either find a store through a pointer copy (e.g. `lea ecx,[eax+0x28]` + call) or
+settle it empirically by measuring degrees-turned per second in game while holding E at default distance.
+
+Consequence of the *older* reading (kept for continuity): the `round(tick)` sub-loops (history loop
+0x1F667, re-anchor loop 0x1FA4F..0x1FE88) run **zero iterations** at a normal frame rate - they are
+stall-recovery machinery, not per-frame work. That conclusion does not depend on which clamp arm is live.
 
 The keyboard analog axis behind M15 is fnA **0x120C70** =
 `(int8)(kbdobj+0x250 - 0x80) x 0.0078125` (scale **1/128** @0x32A778;
