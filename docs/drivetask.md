@@ -697,3 +697,78 @@ termination test for a later tick.
 - Virtual-slot census: match `FF <modrm mod=10 reg=2> imm32==0x1C0` — the disp is **disp32** here
   (`ff 9x c0 01 00 00`), which is why a mod=01 scan finds nothing.
 - Copy-helper direction: read `mov eax,[esp+8]; mov ecx,[esp+4]` at the entry — `eax` (arg2) is the source.
+
+## 14. Stages `0x28`/case 38 and `0x62`/case 96, handlers read through the fetcher contract (D pass) **[V]**
+
+Jump table `.rdata 0x5DC1C` — **194** valid entries per the dispatch bound `cmp edx,0xC1` (§10);
+entry index = stage byte − 2 (same law as §12). Handlers:
+case 38 → RVA `0x5B0C8`; case 96 → RVA `0x5AF2C`. Both resolve their driven object through the interpreter:
+script-context accessor `0x10062770` (and, in `0x62`, target gate `0x100627D0` — both reach a member at
+`interp+0x34` and apply §13.4's descriptor-hierarchy test against `.rdata 0x1032F910`).
+
+### 14.1 Stage `0x28` (case 38) — an authored transition-parameter write, not a clip request **[V]**
+
+At fire (handler RVA 0x5B0C8..0x5B14B):
+- `edi = script ctx` (accessor above); null ⇒ skip the record.
+- Input float through accessor `0x1005E790` — one instruction: `fld [ctx+0x824]`.
+- Call `0x100C8BB0(ctx, &o1, &o2, f_in)`: `o1 ← 1.0f`; `o2 ← [ctx+0x7C8]`, then a switch on the actor's
+  own-status byte from getter `0x10084390` (`dec eax; cmp eax,0x52; ja` past; byte table at `.rdata
+  0xC8E74`, jump table `0xC8E58`) — the case taken can overwrite `o2 ← [ctx+0x7D4]` (RVA 0xC8BE5).
+- Actor method `0x100CD920` takes ~10 args including the two scratch values, two literal `1.0f` weights,
+  and **the record's own float at +8** — `mov ecx,[esi+0x88]` (current stage record) `; mov edx,[ecx+8]`
+  — i.e., §9.5b's carrier {30,24,20,10,60,36,15}. The callee walks the actor's **element list at
+  `[this+0x674]`** (≤3 elements, stride `0x14`) through accessor `0x1002B5A0`, probing each element with
+  predicate `0x1001B360` and assembling a bitmask — the same +0x674 chain family as look-at's bend
+  consumers.
+- Write-back: setter `0x1005E780` — one instruction: `[ctx+0x7D8] ← scratch`.
+
+So `0x28` lands authored transition parameters (float + weights) on the model element list. There is no
+motion/clip selection in this handler or its callees' prologue paths — kuluu's name `TransitionToIdle`
+outlives what these bytes prove; keep it parsed, do not queue clips from it.
+
+### 14.2 Stage `0x62` (case 96) — a one-shot scripted yaw turn queued on the actor **[V]**
+
+At fire (handler RVA 0x5AF2C..0x5B0C7):
+- Allocate a **`0x78`-byte task** via allocator wrapper `0x1005E040`; its constructor `0x10060F80`
+  receives {script ctx, interpreter, duration float}. Flag: `call 0x100D5490(task, 1)`.
+- Duration comes from fetcher `0x1005E590`: `mov eax,[ecx+0x88]; movsx edx,word[record+6]; fild;
+  fmul [interp+0x9C]` — **this closes §12's unresolved duration factor: it is the interpreter field
+  +0x9c** (producer still unread).
+- Gates: script ctx and target must both resolve (`0x62770`, `0x627D0`) or nothing is applied.
+- Position deltas between ctx and target are read through vtable slot byte **`+0x1BC`** — the position
+  getter (its method at RVA 0xACAB0 copies a vec3 from it) — compared component-wise against **`0.1f`**
+  (`.rdata 0x32A378`) and `0.0f` (`0x3295D8`).
+- Authored angle: the record's float at +8 × this layer's approximate π/180 (`.rdata 0x32A9F4`); §9.5b
+  census says every shipped record authors exactly **45.0°**. Heading is read through the same
+  orientation accessor **[vt+0x1C0]** as §13, component at `[eax+4]`, and Δ = authored − heading is
+  re-wrapped into ±π with the layer's approximate triple (`0x329D30`/`0x329D2C`/`0x329D28`).
+- Store via two one-instruction setters: `0x1005E7C0` → **actor+0x870 = |Δ|**; `0x1005E7D0` →
+  **actor+0x874 = signed Δ** (the sign flips when the scratch accumulator ≤ `0.0f`).
+
+The consumer law lives in the actor update code at region RVA `0xC66AF..0xC67DA` **[V for the bytes]**:
+- Gate `[actor+0x7A4] == -1`; a zero `[actor+0x86C]` takes the other branch; pending test
+  `fld [actor+0x870]; fcomp 0.0f` — nothing queued ⇒ exit.
+- **One-shot application:** accumulator **actor+0x620 += +0x874**, re-wrapped into ±π with the same
+  approximate triple (two wrap sites), sign variant selected by comparing `+0x874` against `0.0f` and
+  `+0x870 − |+0x874|` against `0.0f` — bytes read; branch intent marked **[I]**.
+- Consume-and-clear: at RVA `0xC67D4` a literal `0.0f` is stored to **actor+0x870**, then the shared
+  epilogue at `0xC6F4A`. The queued turn applies once; there is no per-frame ramp in this region even
+  though a task object with a duration exists.
+- Initialization context: constructor-like code at RVA `0xC5D60` zeroes both fields (RVA 0xC628D/0xC6293)
+  alongside the parameter block (+0x7C4..+0x8C4, incl. `[+0x7D4] ← bits 0x3F6C7462` ≈ 0.924), and ctor
+  `0xAC8E0` (vtable `.rdata 0x32FD58`) re-zeroes +0x870/+0x874 while setting actor flag bytes +0xB0=1,
+  +0xB2 |= 4 — confirming the fields ride on the same actor/model class as §13's driven object.
+- `actor+0x620` itself is fld/fstp'd in facing-computation clusters at RVA bands `{0x58XXX}` and
+  `{0x8FC00..0x92300}` — read there, laws of those sites unread (named, not guessed).
+
+### 14.3 Consequences for kuluu **[I]**
+
+- D4's question (“carriers feeding the idle↔walk seam”) answers **no clip machinery**: `0x28` writes
+  transition parameters onto the +0x674 element list; `0x62` queues a one-shot yaw offset. The seam fix
+  (D1) stands as landed without them.
+- If kuluu ever dispatches these stages: `0x62` = pending-Δ pair applied once into a yaw-offset field
+  that must feed facing composition; `0x28` needs the element-list parameter semantics decoded further
+  before it means anything here. Both now have schemas, so neither is an unknown carrier anymore.
+- §12's duration factor is closed as interpreter field +0x9c; reproducing retail durations exactly will
+  need that producer eventually.
+

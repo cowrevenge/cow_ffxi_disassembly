@@ -740,7 +740,18 @@ head look-at curve.
 
 ## 9. Where we are looking next
 
-
+**Closed since the older text below was written [V]** (details in
+[drivetask.md](docs/drivetask.md) §12–§14): the dispatch-bound correction — **194** jump-table entries
+(`cmp edx,0xC1`); ActorRotation's ctor and update law closed to the byte (§12); the driven object and its
+angle record named from our own RTTI (§13 — component 1 at `actor+0x48` is the heading) — and kuluu now
+**runs that law** (`jw-stack-815 4b8f0679`). The carrier table (§9.5b there) is answered by reading both
+top-ranked carriers' handlers (§14): `0x28`/case 38 writes authored transition parameters onto the actor's
+element list at `[actor+0x674]`; `0x62`/case 96 queues a one-shot scripted yaw turn (pending pair
+{`actor+0x870 = |Δ|`, `actor+0x874 = signed Δ`} applied once into accumulator `actor+0x620`, cleared at RVA
+0xC67D4). Neither touches clip selection — the idle↔walk seam fix stands as landed without them. The
+duration fetcher's scale is interpreter field +0x9c (§14.2). Named reads remaining in this region:
+producers of `[interp+0x9C]`, the gates `actor+0x7A4`/`actor+0x86C`, and the `actor+0x620` facing sites
+(RVA bands {0x58XXX}, {0x8FC00..0x92300}).
 
 **The head limit/slew/tug — now with a better lead than "somewhere in the curves".** The D pass
 

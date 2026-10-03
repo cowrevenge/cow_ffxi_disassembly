@@ -1,5 +1,8 @@
 # FFXI retail client, research summary
 
+> **Superseded copy.** The live summary lives at [../summary.md](../summary.md) (kept current through the
+> D/X passes; this one's last content commit is the W-pass `05461a6`). Update the root file, not this one.
+
 A cross-pass synthesis of what we have **verified** in `FFXiMain.dll` and what we
 **believe** the client does, for the purpose of bringing the kuluu remake to retail
 parity ("retail is king, dll is king"). Each section cites the pass that verified it.
