@@ -22,7 +22,7 @@ the base view and says nothing about what an overlaid client renders.
 
 **Landed chain on `jw-stack-815`** (oldest first): `5c93cce9` DAT split (row 1) · `087319bd` look point +
 settle rules (row 2) · `acdf77fa` ellipse bend (row 3, opened) · `4dea93d2` second bend bone (row 3 closed) ·
-`a0583409` gates + `0x89` suppression (row 4) · `d8481ee8` focal zoom C1 (row 5) · `5cef95e2` one keyboard aim scale, false tilt law deleted (row 6) · `eeb0ac01` spring default ON + decoupled from the leash row · `7a6b6197` human owns facing: no walker turn rate, one-shot lock square-up, reactor auto-face off · `64b1a0e3` D2 landed-as-verified: same-clip gait requests keep their playhead (caller-side stand-in for xim's identity+lowPriority no-op) + Left/Right moves blend through idle frame 0 (needsInBetweenFrame wired properly; long-arc kept as labelled fallback) · `ea3475c1` D1 landed: crossfades step both layers live (`PreviousSide::Live`; completion handoff lands on the frame the blend sampled) · `4b8f0679` D3 runtime landed (ActorRotation drive-tasks run per fired stage — capture-at-fire, mode-0 hold / countdown ramp, remotes via prediction, self via walker base facing; awaiting Shane's test). Nothing pushed — jw-stack branch only.
+`a0583409` gates + `0x89` suppression (row 4) · `d8481ee8` focal zoom C1 (row 5) · `5cef95e2` one keyboard aim scale, false tilt law deleted (row 6) · `eeb0ac01` spring default ON + decoupled from the leash row · `7a6b6197` human owns facing: no walker turn rate, one-shot lock square-up, reactor auto-face off · `64b1a0e3` D2 landed-as-verified: same-clip gait requests keep their playhead (caller-side stand-in for xim's identity+lowPriority no-op) + Left/Right moves blend through idle frame 0 (needsInBetweenFrame wired properly; long-arc kept as labelled fallback) · `ea3475c1` D1 landed: crossfades step both layers live (`PreviousSide::Live`; completion handoff lands on the frame the blend sampled) · `4b8f0679` D3 runtime landed (ActorRotation drive-tasks run per fired stage — capture-at-fire, mode-0 hold / countdown ramp, remotes via prediction, self via walker base facing; awaiting Shane's test) · `c6aac843` C3 mouse aim ported to retail's position law (row 9, awaiting Shane's test) · `ec3fc4a4` comment-only: M18 spring-back citation corrected per the retraction. Nothing pushed — jw-stack branch only.
 
 ## A. Head / neck look-at — symptom **S3** ([lookat.md](lookat.md))
 
@@ -66,7 +66,7 @@ settle rules (row 2) · `acdf77fa` ellipse bend (row 3, opened) · `4dea93d2` se
 
 ## E. Order I'd take, and how each step gets verified in-game
 
-Nothing below needs more DLL work first except B4 (Shane's ruling only) — the C4 named-read closed 2026-10-04 (M18 correction: ref angle = axis·π/2·turn, underflow claim retracted). Each row is one commit, Shane tests between them.
+Nothing below needs more DLL work first except the **C4 port pass** — the named-read for it closed 2026-10-04 (M18 correction: ref angle = axis·π/2·turn, underflow claim retracted); B4 CLOSED by ruling same day. Each row is one commit, Shane tests between them.
 
 | order | change | verify by |
 |---|---|---|
