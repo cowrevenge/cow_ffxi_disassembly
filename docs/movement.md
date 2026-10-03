@@ -420,7 +420,7 @@ look-at), as M12's table already said:
 two axes, not extra axes.
 
 *Law 1 — azimuth (slot A).* `tick(0x14CF0) × A × .rdata 0x32A3EC (0.027924445)`
-(0x1F01F..0x1F032); when free-run (`[[actor vt]+0x330]`) it is scaled by `.rdata 0x32A3E8
+(0x1F01F..0x1F032); when **not** free-run (`call [[arg-1 actor vt]+0x330]`, regime note below) it is additionally scaled by `.rdata 0x32A3E8
 (6.0) / max(|eye−lookat|, .rdata 0x329A18 (0.01))` (0x1F07B..0x1F09C), then handed to the
 rotator at **0x1F0ED** (second site **0x1F255**, re-anchor branch). ⇒ *constant tangential
 speed*: 60 × 0.027924445 × 6 = **10.053 world-units/s of arc**, i.e. ω = 10.053/dist rad/s.
@@ -500,11 +500,12 @@ an analog axis. A third overwrite exists at 0x1EFFD..0x1F003: when `CFsConf6Win`
 mode `[0x10456db0]==0` all agree, the azimuth slot is replaced by `−(fn 0x25E170 − fn 0x25E100)`; both are composite
 accessors interrogating actions 6/7 (see §10c), so this is another device's aim value taking over the same slot.
 
-*Law 1 has two regimes — free-run only gets the distance normalisation.* The `× .rdata 0x32A3E8 (6.0)/max(|eye−lookat|,
-0.01)` scaling sits inside `call [eax+0x330]; test al; je` (0x1F036..0x1F09C): when the manager is **not** free-run the
-whole block is skipped, so ω = 60 × axis × 0.027924445 = **1.675 rad/s at full deflection regardless of rig radius**,
-and the tangential speed grows with distance instead of staying constant. Which retail states make `vt+0x330` true is
-open (§16) — named settling read, not a guess.
+*Law 1 has two regimes, and the normalisation belongs to the **non**-free-run arm.* At 0x1F036: `call dword ptr [eax+0x330]; test al,al; jne 0x1f0a2` (bytes `ff 90 30 03 00 00 / 84 c0 / 75 62`) — the branch jumps **over** the scaling block (0x1F040..0x1F0A0) when the predicate is true, so:
+
+- predicate true — **no** normalisation: azimuth delta = `tick × axis × 0.027924445`, a fixed **1.675 rad/s at full deflection**, tangential speed growing with rig radius;
+- predicate false — the `6/max(|eye−lookat|, .rdata 0x329A18 = 0.01)` block runs: constant tangential speed (**≈ 10.05 world-units/s of arc**), ω = 10.05/dist.
+
+`eax` here is `esi`, which is **arg-1 of this function** — the followed actor, type-checked at entry against descriptors 0x10330EBC/0x10330684 (M25) — not the rig in `edi` and not the camera manager. §12's player-object table reads that slot as *IsFreeRun (1 = normal walking, 0 = parallel/strafe)*: retail holds a **fixed angular rate while walking freely** and a **constant arc speed in the parallel-move state**. The sibling spring consumer already recorded it this way (§11 M18: “scales x 6.0/max(dist, 0.01) when not free-run”), which is an independent corroboration of the polarity. Tier: branch, both arms and constants [V]; the predicate's *name* comes from §12's inferred table [local], settling read = one body of that vtable slot.
 
 *Rotator radius is planar.* `0x1EBB0` computes d with `call 0x27680(dx, dz)` (0x1EC1E) on the **XZ** pair and floors it
 at `1.0f` (`[0x1032961c]`, 0x1EC35), so eye placement uses planar distance while the caller's normalisation used the
@@ -1173,7 +1174,7 @@ is in [target_track.md](target_track.md) §6.
 | M19 | [local] | L/R arrow yaw dead: zero-cleared slots x -1 = -0 (0x1EF30..0x1EFA1); no retail rate exists | §11 |
 | M20 | [local] | ~~Tick = seconds (write site indirect)~~ — the tick is **elapsed in 1/60 s units, integer-valued** (M29 supersedes; the getter and the 1/128 axis census stand); keyboard analog = 127/128 ≈ 0.992 (1/128 scale @0x32A778); state block 0x10456D70..0x10456DB4 | §11 |
 | M29 | [V] | The frame tick, end to end: object `[0x104568FC]` (0x33C bytes, ctor 0x10700 — `+0x28` tick 1.0f, `+0x2C` -1.0f, `+0x30` divisor 2, `+0x34/38/3C` 0); clock sub-object `[obj+0x1C]` (vptr 0x1032A118; vt+0x20 advance / +0x24 fps=1000/max-elapsed-int / +0x30 scale) on `timeGetTime`; writer = frame-loop tail 0x12A31 (EndScene/Present then Sleep(1)+pause cap spin, ring mean ×0.25 → round → floor at divisor → clamp 20.0, effective fps = 60/tick); **unit = integer count of 1/60 s**, Σ tick ≈ 60 per second whatever the cap; countdowns consume whole frames (0x1EEFE..0x1EF18) | §11c |
-| M30 | [V] | The two aim axes of `UpdatePlayerFollowingCamera`: **action 6 -> azimuth delta handed to rotator 0x1EBB0** (`tick x axis x .rdata 0x32A3EC 0.027924445`, scaled by `6/max(dist,0.01)` only while the manager is free-run; a flat **1.675 rad/s** at full deflection otherwise), **action 7 -> `cam.eye.y += tick x axis x .rdata 0x32A3E4 0.10666667` = 6.4 world-units/s**. `[cam+0x48]` is eye.y, not an azimuth accumulator; reverse partners 0x8B/0x8C are sign flips riding those axes; hold-flag [D7C] zeroes both contributions and countdown [D74] arms to 10 frames | §10b |
+| M30 | [V] | The two aim axes of `UpdatePlayerFollowingCamera`: **action 6 -> azimuth delta handed to rotator 0x1EBB0** (`tick x axis x .rdata 0x32A3EC 0.027924445`, additionally scaled by `6/max(dist,0.01)` ONLY on the non-free-run arm (predicate false = parallel-move; `jne 0x1f0a2` skips it), i.e. a flat **1.675 rad/s** while free-running), **action 7 -> `cam.eye.y += tick x axis x .rdata 0x32A3E4 0.10666667` = 6.4 world-units/s**. `[cam+0x48]` is eye.y, not an azimuth accumulator; reverse partners 0x8B/0x8C are sign flips riding those axes; hold-flag [D7C] zeroes both contributions and countdown [D74] arms to 10 frames | §10b |
 | M31 | [V] | The action table behind them: `GetAnalogKey` 0x123970 takes its **action id as arg-2** (arg-1 `0x3F` is never read), gate = `.data 0x1036CF60[action*2]` device bitmask AND `[0x1036E3A0]`, accessors `.data 0x1036D0D8+action*8` (raw/composite, larger magnitude wins, tail-jump when one is null); actions **4/5 hard-return 0** when `byte[[0x104DFD98]+0x4194]`; actions 6/7 = logical camera axes 3/4 -> mode dispatch fn 0x122E30 on `byte[[0x104E1D4C]+0x4d]` -> **mouse-cursor geometry only** (saturation at 1/5 (.rdata 0x32A39C) or 1/21 (.rdata 0x32DF9C) of the screen rect) **or joystick axis bytes x 1/128; no keyboard key can drive them**; stored axes `input+0x8C/+0x90` are normalized absolute cursor positions (writers 0x15773E / 0x2C7E7A, `.rdata 0x329A08` = 0.5) | §10c |
 | M21 | [local] | Mouse input object `[0x4E1D4C]`: anchor/cursor fields, ±1 edge-saturated normalized offsets (1/21 scale @0x32DF9C), screen rect `[0x106218B4..BA]`; position-based aim, **no rad/px sensitivity** | §10a |
 | M22 | [local] | Steering 0xA77A0: cursor angle quantized to 16 compass sectors (round&0xF), cos/sin+sector out into walker axes | §10a |
@@ -1214,7 +1215,7 @@ is in [target_track.md](target_track.md) §6.
 - ~~0x123970 (GetAnalogKey) full decode~~ — **closed by M31 (§10c)**: arg-2 is the action id, the gate word `.data 0x1036CF60[action*2]` is a device bitmask and there is no device argument. Actions 8b/9a/b/c, 0x79..0x7C, 0x4F/0x50 and 0x16..0x19 are now in the census table; the remaining un-censused ids are unread (they gate nothing in movement.md).
 - Which input mode `byte[[0x104E1D4C]+0x4d]` a default-configured client carries, and what `CFsConf6Win` (0x25E050)/fn 0x25E040 mean beyond gating the mode-4/mode-5 split. Settling reads: the writer of that byte (config load path) and one bounded read of both bodies. Matters only for which *source* a player sees (M31).
 - Who sets `byte[[0x104DFD98]+0x4194]` — the flag that makes actions 4/5 return 0.0 unconditionally (M31). Settling read: writes of `+0x4194` on that object.
-- Which states make the camera manager's own `vt+0x330` true, i.e. whether retail applies the `6/max(dist,.01)` azimuth normalisation right now (M30: only while free-run; otherwise a flat 1.675 rad/s at full deflection). Settling read: locate that vtable slot's body through the manager constructor's slot writes.
+- ~~M30 law 1: which arm carries the distance normalisation, and whose slot is the predicate~~ — **both closed**: `jne 0x1f0a2` (bytes `75 62`) jumps over the scaling block, so it runs **only when IsFreeRun is false** (parallel/strafe) and retail holds a flat 1.675 rad/s while free-running; §11 M18 independently records the same polarity for the spring consumer. The slot belongs to arg-1 of 0x1EE60 (the followed actor), not the camera manager. kuluu always normalised (`jw-stack-815 d232f504`) — corrected in the follow-on kuluu commit; remaining read to upgrade §12's row from [local]: one body of that vtable slot.
 - The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
 - 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.

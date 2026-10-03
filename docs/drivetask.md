@@ -877,3 +877,53 @@ duration is unused — so no behaviour change today). The ×0.7 gate needs an ow
 have yet (`kind ∉ {14,15}` and a `+0x1C` counter > 1 on that owner), which is why it is recorded rather than
 ported.
 
+### 14.6 The consumer of the pending pair, found (2026-10-05) **[V]**
+
+§14.4 left one blocker: *which method composes facing from the `+0x61C..+0x628` angle set*. It is **OnMove**.
+
+*Identification.* The candidate virtual `0xC817A` of §14.4 is not a separate method: it lies inside one function
+body running **RVA 0xC63D0 .. 0xC83BA** (padded-body end; DancingMad's seed table has no start for `0xC817A`, which
+is why the grep of `tables_functions.csv` missed it). `xref_vtable.py` answers where that body is installed:
+
+    HIT: .rdata vtable 0x32D710 slot 8 (vt+0x08) -> 0xC63D0
+    HIT: .rdata vtable 0x330F40 slot 8 (vt+0x08) -> 0xC63D0
+    HIT: .rdata vtable 0x3313E8 slot 8 (vt+0x08) -> 0xC63D0
+
+All three vtables are **264 slots** — the skeleton-actor class chain, whose slot `+0x08` is its per-frame update
+(`OnMove`; DancingMad's census [web], corroborated here by body size and by what it drives). So pending-turn
+consumption happens in the actor's own frame update, shared by three sibling classes: there is no separate
+"compose facing" method to go looking for.
+
+*The consumption law, byte for byte (0xC66BC..0xC67DA).* `esi` = actor:
+
+    c66bc  8b 86 6c 08 00 00   mov  eax, [esi+0x86c]     ; §14.3 enable counter
+    c66c2  85 c0               test eax, eax
+    c66c4  0f 84 15 01 00 00   je   0xc67df              ; counter == 0 -> other path
+    c66ca  d9 86 70 08 00 00   fld  [esi+0x870]          ; pending magnitude P = |d|
+    c66d0  d8 1d d8 95 32 10   fcomp [0x103295d8]        ; vs 0.0
+    c66dd  0f 85 67 08 00 00   jne  0xc6f4a              ; P <= 0 -> nothing queued, exit
+    c66e3  d9 86 74 08 00 00   fld  [esi+0x874]          ; signed delta d
+    c66e9  d8 86 20 06 00 00   fadd [esi+0x620]          ; acc(+0x620) += d
+    ...                        wrap acc into +-pi        ; .rdata 0x329d30 (pi), 0x329d2c (~2pi), 0x329d28 (-pi)
+    c6739  d9 86 74 08 00 00   fld  [esi+0x874]          ; (twice) -> |d| via conditional fchs on compare flags
+    c6754  d8 ae 70 08 00 00   fsubr [esi+0x870]         ; rem = P - |d|
+    c675a  d8 15 d8 95 32 10   fcom 0.0
+    c6765  7a 6d               jp   0xc67d4              ; no second term -> straight to the clear
+    c6767  d9 86 74 08 00 00   fld  [esi+0x874]          ; overshoot case: a SECOND add of +|d|
+    c677e  d8 86 20 06 00 00   fadd [esi+0x620]
+    c67ce  d9 05 d8 95 32 10   fld  0.0
+    c67d4  d9 9e 70 08 00 00   fstp [esi+0x870]          ; clear pending magnitude (both paths)
+
+The queued turn is applied to accumulator `actor+0x620` once per frame, wrapped into +-pi with this layer's
+approximate pi/2π pair, and the magnitude slot is cleared on both branches; when `P - |d| < 0` an extra `+|d|` is
+folded in (net: a positive overshoot doubles its contribution, a negative one cancels). The §14.3 enable-counter
+gate is confirmed as the outer branch.
+
+**Still open on this row** (so nothing here over-claims): what *reads* the three-angle set `+0x61C/+0x620/+0x624`
+after composition. A raw byte census proved unreliable for this pattern (misaligned linear decodes produce false
+hits), so the settling read is: walk each function-start-delimited body that touches those fields, starting from
+this same OnMove body (`lea edi,[esi+0x61c]` at 0xC68A2 and 0xC6C84).
+
+**Consequence for kuluu (D4).** The schema is dispatchable today: on a `0x62` stage store the pair and bump the
+enable counter; in the actor tick consume exactly as above. What must not be invented is what the accumulator
+*feeds* — until that read lands, wiring it yields state nothing renders, so kuluu holds.
