@@ -493,7 +493,8 @@ Record layout is `{xlim f32 @+0, ylim f32 @+4, scale f32 @+8}` (fields read at `
 * the direction is aspect-normalised by the two axes (`0x2B21F..0x2B24F`: `fdiv`/`fmul` pairs) — so the limit is
   genuinely elliptical, not a cone **[V(me)]**;
 * then scaled: one branch multiplies by `scale × 100.0f` (`.rdata` VA `0x1032A3C8` = 100), the other by
-  `scale / x` — the caller selects which via a parameter **[V(me)]** for the arithmetic, **[I]** for its meaning;
+  `scale / z`. Which arm runs is decided *inside* the clamp by the sign of the projected depth, not by a caller
+  parameter; §E.5's own flag reading assigned them the other way round and §E.11 corrects it.
 * radius `R = sqrt(X²+Y²)` (`0x2B2A0..0x2B2AA`), compared to a limit; on the normal path **`fpatan` at
   `0x2B2BD`** then `fcos`/`fsin` × R write the boundary point `[esi]`, `[esi+4]`, with `w = 1.0`
   (`0x2B2C6..0x2B2E0`) **[V(me)]**. Over the limit / degenerate ⇒ branch at `0x2B33F` (re-normalise, force
@@ -586,9 +587,9 @@ Needed before kuluu ports row 3, because §E.2 left "which plane, and what is `s
 0x2b21d  branch on (xlim <=> ylim):
            u *= xlim/ylim     (aspect-normalise one component, chosen by the bigger axis)
            v *= ylim/xlim
-0x2b253  test w (=third component) > 0:
-           w > 0 : k = 1.0/w      (`0x1032961c` = 1.0f)   ; u,v *= scale * k     -> offsets per unit depth
-           else  :                u,v *= scale * 100.0f   (`0x1032a3c8`)          -> target behind the plane, pushed out
+0x2b253  test w (=third component) > 0:      *** CORRECTED BY §E.11 — these two arms were recorded inverted: ***
+           w > 0 (or unordered): k = 1.0/w   (`0x1032961c` = 1.0f) at RVA 0x2b286 ; u,v *= scale*k -> offsets per unit depth
+           w <= 0 (at/behind)  :              u,v *= scale * 100.0f (`0x1032a3c8`) -> no perspective to take, driven past the rim
 0x2b2a0  R = hypot(u,v); compared to a limit; over-limit path:
            fpatan @0x2b2bd -> θ; [out]=cosθ·limit, [out+4]=sinθ·limit; w written as 1.0; `scale` stored at [out+8]
 ```
@@ -623,7 +624,7 @@ The port (kuluu `acdf77fa`) forced a read of the bend prologue rather than the c
   `{5} ∪ {0x2F, 0x30} ∪ {0x3F…0x53} ∪ {0x55}` — a match jumps to the write of loop-count `1` (RVA 0x2AE96), otherwise count `2` (RVA 0x2AE8B/0x2AE90) **[V(me)]**. §E.1's `{0x30} ∪ {0x3F..0x53}` missed `5`, `0x2F` and `0x55`. Chain re-read from raw bytes 2026-10-05: head `83 fe 05` (`cmp esi,5`) at RVA **0x2ADFC** with its `je 0x1002ae96` at **0x2AE0D**; then `cmp esi,0x55` @0x2AE13, `cmp esi,0x2f` @0x2AE18, the 17-way expansion `cmp esi,0x3f`…`cmp esi,0x53` (0x2AE1D..0x2AE84), and `cmp esi,0x30` @0x2AE86; every arm is a short/rel `je` into 0x1002AE96 (`mov [esp+0x10],1`); the miss-fallthrough writes `mov ebp, 2` @**0x2AE8B**. The pair `{3,7}` at 0x2AC7A re-read as `c6 44 24 1e 03 c6 44 24 1f 07` **[V(me)]**.
 * Statuses `5` and `0x55` additionally get `1.0f` subtracted from a float parameter at RVA 0x2ACA8..0x2ACB2 before any of this **[V(me)]** — semantics unknown, and irrelevant to a head bend that only carries one record.
 * **The `push 2.0f` helper is `0x272b0(vec3*, scalar)`: it multiplies all three components** (RVA 0x272b8/0x272c0/0x272ca, no ret-immediate, uniform). Because the front branch then scales by `k = 1.0/w` on that same doubled vector and `w` was doubled too, the factor cancels exactly; behind the plane it only pushes an already-over-limit point further past a rim whose position depends solely on its bearing. **The ×2 cannot change the aim direction** — a port may ignore it **[V(me)]**.
-* **The comparison radius is `min(xlim', ylim')`.** Both aspect-normalisation arms leave a circle: when `xlim' ≤ ylim'` (fall-through at RVA 0x2B21F) the second in-plane component is scaled by `xlim/ylim`; when `xlim' > ylim'` (RVA 0x2B239) the first by `ylim/xlim`. Either way `hypot` is then compared with the *smaller* guard-clamped axis, and on the over-limit arm the shrunk component is divided back by the stored ratio (`[esp+8]`, written at RVA 0x2B227/0x2B243; restored at RVA 0x2b2f7..0x2b30c). Read end to end this is exactly *point-in-ellipse* with semi-axes `xlim' × ylim'` plus radial projection onto the boundary **[V(me)]** — which closes §E.5's second bullet and confirms §E.2's "genuinely elliptical".
+* **The comparison radius is the *wider* guarded semi-axis** — `max(xlim', ylim')` in the space the aspect stretch produces (*** CORRECTED BY §E.11 **: this line originally said `min`; re-reading the arm selector at RVA 0x2B212..0x2B21D and which FPU slot the compare at RVA 0x2B2AC consumes gives the wider one, which is what an ellipse→circle normalisation has to bound against). Both aspect-normalisation arms leave a circle: when `xlim' ≤ ylim'` (fall-through at RVA 0x2B21F) the second in-plane component is scaled by `xlim/ylim`; when `xlim' > ylim'` (RVA 0x2B239) the first by `ylim/xlim`. Either way `hypot` is then compared with the wider (stretched-to) axis — see the correction at the head of this bullet — and on the over-limit arm the shrunk component is divided back by the stored ratio (`[esp+8]`, written at RVA 0x2B227/0x2B243; restored at RVA 0x2b2f7..0x2b30c). Read end to end this is exactly *point-in-ellipse* with semi-axes `xlim' × ylim'` plus radial projection onto the boundary **[V(me)]** — which closes §E.5's second bullet and confirms §E.2's "genuinely elliptical".
 
 ### E.7 — joint identity for the reference slots, from the HumeM skeleton (data side) **[V(me)]**
 
@@ -640,7 +641,7 @@ The port (kuluu `acdf77fa`) forced a read of the bend prologue rather than the c
 Head is **52** (its children 53…60 are the face cluster), upper torso/chest is **50**, and 51 sits between them. Pose space: the chain advances along `+X`, up is `-Y`.
 
 **This section's slot-4 conclusion was wrong for the bend; §E.8 replaced it.** The two attach slots read here (`3`, `4`) are what the *first* pass of the bend uses to build its frames. Which bones the two records rotate comes from a different byte pair, `{3, 7}`:
-* record[0] ↔ reference slot **3** (`EID_NECK`) → joint **51**, the neck: ≈`atan(0.24)` ≈ 13.5° horizontal and ≈`atan(0.16)` ≈ 9.1° vertical with humanoids' authored numbers, damped below that by `scale = 0.5`.
+* record[0] ↔ reference slot **3** (`EID_NECK`) → joint **51**, the neck. *** Half-widths CORRECTED BY §E.11: *** `scale` multiplies the tangent offsets while the bound stays authored, so a record's angular half-width is `atan(xlim/scale)` across and `atan(ylim/scale)` up/down — humanoids' `(0.24, 0.16)` at `scale 0.5` gives ≈**25.7°** and ≈**17.7°**. The earlier figures (`atan(0.24)` ≈ 13.5°, `atan(0.16)` ≈ 9.1°, scale treated as damping) were wrong in the same way as §E.5's arm assignment.
 * record[1] ↔ reference slot **7** (`EID_CHEST`) → joint **50**, the neck's parent and the owner of shoulder/arm children 60/74 — §E.3's smaller `(0.16,0.06)` ellipse is a chest-side share expressed through the hierarchy, exactly as §B describes it.
 * Slot `4` (`EID_LOOK_AT`) resolving to root with offset `(0,-1.5,-1.8)` is correct for what it is: an attach point that supplies one of the bend's frames, never a bone to rotate. "Record[1] cannot be expressed" was the result of conflating those two roles.
 
@@ -875,6 +876,76 @@ construction — fetch the same authored reference frames (slots 3 and 4), build
 compose the bend onto the bone's own node orientation as §E.9 records. Swapping components inside kuluu's current
 frame would be a second guess stacked on the first: these numbers say which axis is which for a bind-pose bone
 with no clip applied, and they are not retail's basis.
+
+### E.11 — the clamp law transcribed end to end; two recorded branch conditions corrected (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)] [measured]**
+
+E.5 left the clamp as an `[esp+N]` sketch, and two conditions recorded there (and carried into §E.6/E.7) are inverted with respect to the bytes. kuluu shipped from them; the play-test symptom was `a target to the side produces a downward look`. This pass read `0x2B140` instruction by instruction — and, because every branch here turns on an x87 condition mask whose meaning had been *asserted* rather than measured across several earlier passes, measured what those masks mean first.
+
+**The flag mapping, measured.** The encodings themselves (`fld dword [rdx] / fcomp dword [rdx+4] / fnstsw ax`, stored to memory and read back) were executed over known operands:
+
+| comparison | bits set in `AH` |
+|---|---|
+| `a > b` | none |
+| `a < b` | bit 0 → **C0** (below) |
+| `a == b` | bit 6 → **C3** (zero) |
+| unordered | bits 0, 2, 6 → C0, **C2**, C3 |
+
+What that fixes for masks this file leans on: `test ah,0x41` + `jp` jumps when exactly one of {C3,C0} is set — jump on *equal-or-less*, and a NaN does **not** take it; `test ah,0x44` + `jp` jumps when exactly one of {C3,C2} is set — jump on *equal* (NaN not taken); the `and eax,0x4100` + ZF form is the usual greater test. Every reading below uses that mapping.
+
+**The body (`stdcall`, 4 args, `ret 0x10`: out, at, point, record).**
+
+```
+0x2b1a7  call 0x1002d8141        ; basis from `at`: origin seed (0,0,0) @0x2b167..0x2b17f, up hint (0,1,0)
+                                 ;   @0x2b187..0x2b19f. d = normalize(at−origin) via 0x2d6491; side =
+                                 ;   normalize(up_hint × d) (three fsub pairs 0x2d8179..0x2d81b5); up' = d × side.
+                                 ;   Axes stored as columns (+0/+0x10/+0x20 · +0x04/… · +0x08/…); translation
+                                 ;   −(axis·origin) (fchs at 0x2d8213 / 0x2d824b) — zero with this origin.
+0x2b1bd  call 0x100282c0         ; project `point` into the basis = three dot products against those axes
+0x2b1cb  push 0x40000000; call 0x272b0    ; v *= 2.0f uniformly (E.6: provably cannot move a boundary)
+0x2b1db..0x2b212                 ; limit guards: fld [ecx] / fcomp dword [0x103295d8] (=0) / test ah,0x44 / jp keeps the
+                                 ;   authored value; falling through loads 0.001f (`0x3a83126f` @0x2b1f3 for xlim, stored
+                                 ;   to memory @0x2b20a for ylim). *** CORRECTED: that mask fires on EQUALITY, so a
+                                 ;   NEGATIVE limit is not guarded and reaches the ratio as authored; two zero-guarded
+                                 ;   axes collapse the rim onto the aim axis (nothing left to turn). ***
+0x2b212..0x2b21d                 ; compare the two guarded axes (`and eax,0x4100` / `jne` → the xlim ≤ ylim arm)
+     xlim > ylim : 0x2b21f..0x2b233   v.y ([esp+0x18]) *= xlim/ylim      ; ratio kept at [esp+8]
+     otherwise   : 0x2b239..0x2b24f   v.x ([esp+0x14]) *= ylim/xlim
+                                 ; the radius consumed below is whichever axis won, i.e. the WIDER one (E.6 corrected)
+0x2b253  fld [esp+0x1c] / fcomp dword [0] / fnstsw ax / test ah,0x41 / jp 0x2b280
+     jump   (v.z > 0 or unordered): 0x2b280..0x2b29c  k = 1.0f/v.z (.rdata 0x1032961c, copy at [esp+0xc]);
+                                     u = v.x·scale·k (0x2b28e/0x2b291), w = v.y·scale·k (0x2b299/0x2b29c)
+     fall    (v.z ≤ 0):             0x2b264..0x2b278  u = v.x·scale·100.0f, w = v.y·scale·100.0f (.rdata 0x1032a3c8)
+                                 *** THE ARM CORRECTION: §E.5 assigned ×100 to "in front" and the divide to "behind".
+                                 The jump target holds the divide, so the DIVIDE is the ahead arm and ×100 the at-or-
+                                 behind arm. kuluu's `BEHIND_PUSH`/depth division were therefore right about which arm
+                                 was which and wrong only about which vector components fed them (§E.10). ***
+0x2b2a0..0x2b2ae                 ; r = fsqrt(u²+w²); fcomp st(3) (the radius the arm left on the stack) /
+                                 ; and eax,0x4100 / jne 0x2b33f → inside-or-on takes the not-clamped exit
+     not clamped : 0x2b33f..0x2b371   drop the projections; copy3 (0x26eb0) of v into out; force [out+0xc] = 1.0f; return 0
+     on the rim  : 0x2b2bb fxch st(1); 0x2b2bd fpatan   ; bearing from (w,u): cos picks up u's sign, sin w's
+                      0x2b2c8 fcos × radius → [esp+0xc], [out]      ; xlim-or-ylim arm value
+                      0x2b2d2 fsin × radius → [esp+0x10], [out+4]
+                      0x2b2dd mov ecx,[ecx+8]; 0x2b2eb mov [out+8],ecx   ; *** out.z = the record's own scale, re-read ***
+                      0x2b2e0 mov [out+0xc],1.0f
+                      0x2b2e7 fcomp dword [esp+4] … 0x2b2f5 jne → undo on x (fld [esp+0xc]/fdiv [esp+8] → [out])
+                                                    else     → undo on y (fld [esp+0x10]/fdiv [esp+8] → [out+4])
+                                 ; the compare selects exactly the axis the aspect stretch scaled, so the whole rim step
+                                 ; reconstructs to out = (cosθ·xlim, sinθ·ylim, scale) — an ELLIPTICAL boundary, not a circle
+                      0x2b312 call 0x283c0 (invert basis); 0x2b31c call 0x28290 (transform back); 0x2b322 call 0x274b0
+                                 ; normalise in place; return 1
+```
+
+**Numerically.** `scale` multiplies the tangent offsets while the bound stays authored, so a record's angular half-width is `atan(xlim/scale)` across and `atan(ylim/scale)` up/down: humanoids' `(0.24, 0.16)` at `scale 0.5` ⇒ ≈25.7° and ≈17.7°. §E.7's `atan(0.24)`≈13.5°/`atan(0.16)`≈9.1° figures treated scale as damping; corrected there too.
+
+**Still [I], each with the read that settles it.**
+* How retail turns the clamped vector into the per-record quaternion, roll included: only the pass-1 store path between RVA 0x2AF3D and RVA 0x2AF8B can say. kuluu applies a minimal arc from the steered axis to the clamped direction meanwhile — that fixes yaw/pitch and cannot reproduce any separate roll law.
+* Whether the two bend objects hold attach *positions* or one row of a full frame matrix: `0x2A750` returns through an out pointer that this caller uses as three floats (`fsub` writes `[esp+0x30]`, i.e. slot-4 object +4; the normalise at RVA 0x2ACCC gets the object base), while `0x2A780` visibly assembles a rotation-then-translation matrix internally. Settling read: `0x26E10` (the out initialiser) and `0x2A890` (what actually lands at the out address). kuluu's shared axis is slot-3-minus-slot-4 on this reading, with nothing built on top of that choice.
+
+Reproduce (host python): constants via `struct.unpack_from('<f', d, rva)` at `0x3295d8` = 0, `0x32a22c` = 0.001, `0x32961c` = 1.0, `0x32a3c8` = 100.0; the flag probe is `fld dword [rdx] / fcomp dword [rdx+4] / fnstsw ax / mov word [rcx],ax`, executed from an allocated RWX page over the four comparison cases in the table.
+
+Landed in kuluu as `ffxi-actor/src/look_bend.rs::clamp_bend_axis` with tests `a_point_inside_the_ellipse_is_handed_back_unchanged`, `a_saturated_bend_stops_at_the_records_own_angle`, `a_point_behind_the_plane_saturates_without_diverging`, `only_a_record_with_both_axes_zero_is_inert`.
+
+---
 
 ## F. Leads & observations carried from summary.md §9 tail (split 2026-10-05 — history, with current status tagged)
 
