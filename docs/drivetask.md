@@ -797,8 +797,9 @@ order (settling read: that call site's own prologue/arg provenance). Named acces
 **0x5E7C0** (`mov [ecx+0x870], eax`) and **0x5E7D0** (`mov [ecx+0x874], eax`); neighbours 0x5E7B0 returns
 `[ecx+0x800]`, and **0x5E7E0** is a read-modify-write setter of bit 22 of `[ecx+0x840]` (the §B "hold" word).
 
-Producer — function **0x5AF2C..0x5B0C8**, no direct callers; its VA appears as a stored pointer in the
-embedded pointer array around RVA `0x5DD80..0x5DDD0` and in a lone data cell at **0xBC2B38**. Read law:
+Producer — function **0x5AF2C..0x5B0C8**, **the scheduler jump-table handler for stage byte `0x62`** — no direct call exists because it is
+dispatched: cell `0x5DD9C` (`case = 0x62 - 2`) holds its VA (re-read bytes in §15.1); it also appears as a stored
+pointer in the embedded array around RVA `0x5DD80..0x5DDD0` and in a lone data cell at **0xBC2B38**. Read law:
 
 * allocates a 0x78-byte object (`push 0x78; call 0x1005E040`) and pulls both interpreter/script-context
   getters `0x62770` and `0x627D0`; if either is null it bails to `0x5AC96` — the turn only ever queues while a
@@ -806,9 +807,15 @@ embedded pointer array around RVA `0x5DD80..0x5DDD0` and in a lone data cell at 
 * `push 1; call 0xD5490` on that object -> increments its `+0x86C`, which is what unlocks consumption above.
 * target angle read through vtable slot `[edx+0x1C0]`, then `Δ = want - [eax+4]` — component 1 of the §13
   angle record, i.e. the heading; wrapped into ±π with the same triple used by the consumer.
-* stores `fabs(Δ)` via **0x5E7C0** (at 0x5B08F) and the signed Δ via **0x5E7D0** (at 0x5B0B6), negating when the
-  zero-compare at 0x5B098 flags (`fcomp [0x103295D8]`).
-* an unnamed factor: value from vtable `[ebx+0x1BC]` scaled by `fmul [0x1032A9F4]` (identity unread).
+* stores `fabs(Δ)` through setter **0x5E7C0** (`mov [ecx+0x870], eax`) at call site **0x5B08F**, and the
+  **authored per-frame rate** — the float at script-record cursor `[ [esi+0x88] + 8 ]` multiplied by this
+  layer's π/180 (`.rdata 0x1032A9F4`, bytes `3c 8e f9 21` = 0.017452778) and sign-matched to the wrapped
+  difference — through setter **0x5E7D0** (`mov [ecx+0x874], eax`) at call site **0x5B0B6**. So `+0x870` is how far
+  and `+0x874` is how fast, not “|d| and signed d”; full bytes in §15.5.
+* `call [edx+0x1BC]` / `call [eax+0x1BC]` are **position** accessors, not scalars: on the skeleton-actor chain
+  they return a pointer to `+0x5FC`, on plain `CXiActor` one to `+0x34` (§15.4). The Δ above is a
+  component-wise position difference between the two script-context objects; there is no unnamed scaling factor here,
+  and the `fmul [0x1032A9F4]` belongs to the record operand described in the bullet before it.
 
 What consumes the accumulator — census of displacement `0x620`: 160 touches in `.text`, and **all but a
 handful are this wrap-normalization** (`fld/fcomp triple; fsub|fadd [0x329D2C]; fstp`) repeated across ~10
@@ -914,10 +921,12 @@ consumption happens in the actor's own frame update, shared by three sibling cla
     c67ce  d9 05 d8 95 32 10   fld  0.0
     c67d4  d9 9e 70 08 00 00   fstp [esi+0x870]          ; clear pending magnitude (both paths)
 
-The queued turn is applied to accumulator `actor+0x620` once per frame, wrapped into +-pi with this layer's
-approximate pi/2π pair, and the magnitude slot is cleared on both branches; when `P - |d| < 0` an extra `+|d|` is
-folded in (net: a positive overshoot doubles its contribution, a negative one cancels). The §14.3 enable-counter
-gate is confirmed as the outer branch.
+The queued turn is applied to accumulator `actor+0x620` once per frame, wrapped into ±π with this layer's
+approximate pi/2π pair, and the magnitude slot is cleared on both branches. When `P - |step| < 0` the extra term is that
+**leftover** (`rem = P - |step|`), added with a sign chosen by comparing `[esi+0x874]` against 0 so it pulls the
+accumulator **back**: net displacement in that frame is exactly `P` toward `sign(step)` — no doubling and no
+cancelling (byte-level walk, including which branch adds `+rem` and which `−rem`: §15.6). The §14.3 enable-counter gate is
+confirmed as the outer branch.
 
 **Still open on this row** (so nothing here over-claims): what *reads* the three-angle set `+0x61C/+0x620/+0x624`
 after composition. A raw byte census proved unreliable for this pattern (misaligned linear decodes produce false
@@ -927,3 +936,269 @@ this same OnMove body (`lea edi,[esi+0x61c]` at 0xC68A2 and 0xC6C84).
 **Consequence for kuluu (D4).** The schema is dispatchable today: on a `0x62` stage store the pair and bump the
 enable counter; in the actor tick consume exactly as above. What must not be invented is what the accumulator
 *feeds* — until that read lands, wiring it yields state nothing renders, so kuluu holds.
+
+## 15. Row D4 close-out: the orientation lock (stage `0x2F`), and what stage `0x62` really queues (re-read byte-for-byte in this build, 2026-10-06) **[V]**
+
+Everything below was re-read from raw bytes in our own binary (`FFXiMain.unpacked.dll`, TDS `0x6A995428`); file
+offset == RVA throughout. This section closes the two loose ends §14 left, corrects two sentences there (§14.3's
+second stored operand, §14.6's overshoot), and adds one new fact set: who owns an actor's orientation and how a
+routine takes that ownership away from the wire.
+
+### 15.1 One jump table, four stage bytes, three sibling lock tasks **[V]**
+
+§5a established the scheduler dispatch base **`0x5DC1C`** with `case = stage byte − 2`; cells hold absolute VAs
+(little-endian). Re-read cells:
+
+| stage | cell RVA | cell bytes | handler | object built | alloc | duration operand |
+|---|---|---|---|---|---|---|
+| `0x2E` | `0x5DCCC` | `6d c8 05 10` | **`0x5C86D`** | ctor `0x62310` (call @`0x5C8A8`) | `push 0x78` @`0x5C87C` | rounded |
+| **`0x2F`** | `0x5DCD0` | `ba c8 05 10` | **`0x5C8BA`** | ctor **`0x624B0`** (call @`0x5C8F5`) | `push 0x78` @`0x5C8C9` | rounded |
+| `0x59` | `0x5DD78` | `07 c9 05 10` | **`0x5C907`** | ctor `0x62650` (call @`0x5C942`) | `push 0x78` @`0x5C916` | rounded |
+| **`0x62`** | `0x5DD9C` | `2c af 05 10` | **`0x5AF2C`** | companion ctor `0x60F80` (call @`0x5AF52`) | `push 0x78` @`0x5AF2E` | **unrounded** |
+| `0x07` | `0x5DC30` | — | `0x5A280` | (§9's carrier row) | | |
+
+The three lock handlers are byte-identical in shape (`0x5C8BA` shown; the other two differ only in ctor address):
+
+    5c8ba  8b ce                mov  ecx, esi
+    5c8bc  e8 af 5e 00 00       call 0x10062770         ; script-context self getter
+    5c8c1  85 c0               test eax, eax
+    5c8c3  0f 84 cd e3 ff ff   je   0x5ac96            ; no context -> stage is a no-op
+    5c8c9  6a 78               push 0x78
+    5c8cb  e8 70 17 00 00       call 0x1005e040         ; task alloc
+    5c8d5  85 ff                test edi, edi
+    5c8d7  0f 84 b9 e3 ff ff   je   0x5ac96            ; OOM -> no-op
+    5c8dd  8b ce               mov  ecx, esi
+    5c8df  e8 ac 1c 00 00       call 0x1005e590         ; duration fetcher (a ctx-scaled thunk, §14.5 family)
+    5c8e4  e8 43 53 2b 00       call 0x10311c2c         ; ftoi_round
+    5c8e9  50                  push eax                 ; integer frame count
+    5c8ea.. 5c8f5              (ctx self again, then `push esi` = the actor) call 0x100624b0
+
+**This closes §14.3's `[I]`:** the function §14.3 called "producer `0x5AF2C`, no direct callers" is simply
+**the jump-table handler for stage byte `0x62`** (cell `0x5DD9C`). It was never a helper; and its companion's
+duration reaches the ctor **unrounded** — the fetcher result is spilled with `fstp dword ptr [esp]` @`0x5AF46`,
+overwriting the slot reserved by `push ecx` @`0x5AF43`, with no `ftoi_round` call before
+`call 0x10060f80` @`0x5AF52`. The three lock tasks round; the turn companion does not.
+
+### 15.2 Stage `0x2F` = *HoldRotation*: taking orientation away from the wire **[V]**
+
+Ctor **`0x624B0`** (`ret 0xc`). The handler pushes three arguments before it (§15.1) and the body consumes them at
+`[esp+4]`, `[esp+0x14]` and `[esp+0x18]`; exact arg *order* is not needed for this row and is deliberately **not**
+asserted here:
+
+    624c9  db 44 24 18         fild dword ptr [esp + 0x18]   ; duration int
+    624d4  c7 07 00 c0 32 10   mov  dword ptr [edi], 0x1032c000     ; main vtable (.rdata)
+    624da  d9 5f 74            fstp dword ptr [edi + 0x74]          ; remaining, float frames
+    624dd  c7 06 e4 bf 32 10   mov  dword ptr [esi], 0x1032bfe4     ; sub-object at task+0x34
+    ...
+    624f2  e8 d9 91 fd ff       call 0x1003b6d0                     ; chain helper -> the actor object
+    62502  8b 10               mov  edx, dword ptr [eax]            ; that object's vtable
+    62504  6a 01               push 1
+    62506  8b c8               mov  ecx, eax
+    62508  ff 92 14 03 00 00   call dword ptr [edx + 0x314]         ; ACQUIRE orientation ownership
+
+Tick **`0x62520`** (the scheduler's per-frame `update`). The quantum it consumes is the dt this layer has been
+using throughout — global `0x1047BFA8`, field `+0xEB0`, whose sole writer is `0x69F90` storing the return of
+`0x14CF0()` (joint.md J7), and M29 proves that getter returns integer counts of 1/60 s:
+
+    62520  a1 a8 bf 47 10      mov  eax, [0x1047bfa8]
+    62525  d9 80 b0 0e 00 00   fld  dword ptr [eax + 0xeb0]
+    6252b  d8 69 74            fsubr dword ptr [ecx + 0x74]        ; remaining -= tick
+    6252e  d9 51 74            fst  dword ptr [ecx + 0x74]         ; keep the remainder (no clamp)
+    62531  d8 1d d8 95 32 10   fcomp dword ptr [0x103295d8]        ; vs 0.0
+    ...              test ah, 5 / jp 0x62548                        ; remaining >= 0 -> NOT finished
+    6253e..62547     call [edx + 0x18] with push 1                  ; finish the scheduler entry
+
+Flag convention as recorded in movement.md §11d (`test ah,5` + `jp` ⟺ ST ≥ src, unordered folded in). So the hold
+runs **exactly the authored frame count** and releases on the first frame whose subtraction pushes the remainder
+strictly below zero; a remainder that lands exactly on 0 holds one more frame. Dtor **`0x62460`** releases
+unconditionally, through the same chain helper `0x1003b6d0` @`0x62475` (`push 0` @`0x62487`,
+`call [edx + 0x314]` @`0x6248B`), so a destroyed task never leaves the actor
+owned.
+
+The ownership pair, per class (slot numbers are **byte** offsets into the vtable, i.e. `call [edx+0x314]`; slot
+*index* = byte/4):
+
+| what | fn | bytes | meaning |
+|---|---|---|---|
+| predicate slot `+0x318` | **`0xA4A10`** | `8b 81 38 08 00 00 / c3` | `return [this+0x838]` — the refcount itself |
+| acquire/release slot `+0x314` | **`0xD5460`** | `8a 44 24 04 / 3c 01 / 75 10 …` | arg==1 → `++[this+0x838]`; arg==0 and `[this+0x838] > 0` → `--`; any other arg no-op (`ret 4`). A nesting counter, not a flag. |
+| destructor reset | in **`0xC5D95..0xC5DAC`** | `25 ff 7f ff ff` @`0xC5D9D`, stores @`0xC5DA6`/`0xC5DAC` | clears bit 23 of `[+0x840]` and zeroes `[+0x838]` (ebx = 0) |
+
+Census of that pair (`xref_vtable.py` + direct table reads): exactly **7 vtables** carry
+`(+0x314, +0x318) = (0xD5460, 0xA4A10)` — `.rdata 0x32D710`, `0x32E890`, `0x32ECB0`, `0x32F0D0`, `0x32F4F0`,
+`0x330F40`, `0x3313E8`. Those are the skeleton-actor class chain whose slot `+0x08` is `OnMove` (§14.6), i.e. every
+class that can consume a pending turn can also be held. Two other shapes exist for the same two slots:
+
+* plain **`CXiActor`** table `.rdata 0x32CFE0`: getter **`0x826B0`** = `xor eax, eax / ret` (never owned) and
+  acquire **`0x826C0`** = `ret 4` (no-op). A non-skeleton actor cannot be held and never queues a turn.
+* table `.rdata 0x32EA50`: those slots are a **byte flag** pair at `[obj+0x8A7]` — getter `0xA4AD0`
+  (`mov al, [ecx+0x8a7]; ret`) and setter `0xA4AE0` (`mov byte ptr [esp+4] -> [ecx+0x8a7]`). Different semantics;
+  which class this is stays **[I]** (settling read: the ctor that installs `.rdata 0x32EA50`).
+
+### 15.3 What a hold actually suppresses — the wire→actor orientation copy **[V]**
+
+Per-entity update region (`esi` = entity, `[esi+0xA0]` = its actor):
+
+    8fbc0  89 88 e4 00 00 00   mov  dword ptr [eax + 0xe4], ecx     \  wire rotation vec4 ->
+    8fbc6  89 90 e8 00 00 00   mov  dword ptr [eax + 0xe8], edx      \  actor+0xE4..0xF0, from the
+    8fbd4  89 88 ec 00 00 00   mov  dword ptr [eax + 0xec], ecx       | stack args, i.e. the wire value
+    8fbde  89 90 f0 00 00 00   mov  dword ptr [eax + 0xf0], edx      /
+    8fbea  8d 44 24 34         lea  eax, [esp + 0x34]              ; wire position
+    8fbee  81 c1 c4 05 00 00   add  ecx, 0x5c4                     ; actor+0x5C4
+    8fbf6  e8 95 72 f9 ff       call 0x10026e90                    ; memcpy(dst, src) - UNCONDITIONAL
+    8fc06  8b 17               mov  edx, dword ptr [edi]           ; actor vtable
+    8fc08  ff 92 18 03 00 00   call dword ptr [edx + 0x318]        ; owned?
+    8fc0e  85 c0               test eax, eax
+    8fc10  0f 85 e0 00 00 00   jne  0x8fcf6                        ; -> skip BOTH the copy and the wraps
+    8fc1a  8d 9f 1c 06 00 00   lea  ebx, [edi + 0x61c]             ; actor+0x61C (rendered orientation)
+    8fc22  e8 69 72 f9 ff       call 0x10026e90                    ; memcpy(actor+0x61C, &wire quat)
+    ...                     ±pi wrap of each component            ; .rdata 0x329d30 (pi), 0x329d2c (~2pi), 0x329d28 (-pi)
+
+So `HoldRotation` freezes **the copy into `actor+0x61C..+0x628`**, while the wire values keep landing in
+`actor+0xE4..+0xF0` and position keeps landing in `+0x5C4`. Which other code consumes `+0xE4..+0xF0` stays **[I]**
+(settling read: field census on that triple/quad inside the actor-update body).
+
+### 15.4 The accessors §14.3 called "unnamed" are per-class pointer getters **[V]**
+
+| slot (byte) | skeleton-actor chain (7 tables above) | plain `CXiActor` `.rdata 0x32CFE0` | what it returns |
+|---|---|---|---|
+| `+0x1BC` | **`0xA4740`** = `8d 81 fc 05 00 00 / c3` → `lea eax,[ecx+0x5fc]` | **`0x820E0`** = `lea eax,[ecx+0x34]` | pointer to the object's position triple |
+| `+0x1C0` | **`0xA4750`** = `8d 81 1c 06 00 00 / c3` → `lea eax,[ecx+0x61c]` | **`0x820F0`** = `lea eax,[ecx+0x44]` | pointer to the angle record (§13's record) |
+
+Two consequences. (a) §14.3's bullet "an unnamed factor: value from vtable `[ebx+0x1BC]` scaled by
+`fmul [0x1032A9F4]`" was a **mis-read**: `call [edx+0x1bc]` yields no number to scale — it is the position-getter,
+and the thing scaled at `.rdata 0x1032A9F4` comes from the script record (§15.5). (b) ActorRotation (§13/§14, on
+plain `CXiActor`) and stage `0x62` (on the skeleton actor) measure angles through **the same accessor numbers on
+two different classes**; both angle records live side by side on the skeleton actor (`lea esi,[obj+0x61c]` seeded
+next to `[obj+0x44]`, §14.3).
+
+### 15.5 What stage `0x62` computes at fire time (producer body re-read, `0x5AF2C..0x5B0C8`) **[V]**
+
+*Task + enable counter.* `push 0x78; call 0x1005e040` @`0x5AF2E`; companion ctor **`0x60F80`** stores the
+duration as a raw dword (`mov ecx,[esp+0x18] / mov [esi+0x74],ecx` @`0x5AF99-0x60FA1`) with vtables
+`.rdata 0x32BC3C / 0x32BC68`; the companion dtor **`0x60F40`** releases through `push 0` @`0x60F44`,
+`call 0xd5490` @`0x60F5E`; its tick **`0x60FD0`** is the same countdown shape on field `+0x74`, finishing only when
+the remainder goes strictly negative. The enable bump is a *direct* call —
+`push 1; mov ecx, edi; call 0xd5490` @`0x5AF7D` — and **`0xD5490`** is the sibling of `0xD5460`: identical shape,
+field `[this+0x86C]`. So ownership uses the vtable slot (`0xD5460`, field `+0x838`) while the turn-enable uses the
+free function (field `+0x86C`): two counters, never conflated.
+
+*Objects.* self = ctx getter **`0x10062770`**, object to face = ctx getter **`0x100627D0`**; either null →
+branch to `0x5AC96`, nothing stored (§14.3's claim, confirmed).
+
+*Geometry.* Three pairs of `[vt+0x1BC]` calls per object — the middle pair's result is discarded (compiler
+artifact; no third record exists) — giving one direction vector:
+
+    5af98  d9 45 00            fld  dword ptr [ebp]        ; other.x   (record+0)
+    5af9b  d8 20               fsub dword ptr [eax]        ; - self.x      => dx -> slot esp+0x3c @0x5AFA1
+    5afcb  d9 43 08            fld  dword ptr [ebx + 8]    ; other.z   (record+8)
+    5afce  d8 60 08            fsub dword ptr [eax + 8]    ; - self.z      => dz -> slot esp+0x44 @0x5AFD1
+
+*Degenerate guard, as written.* `fld dx; fcomp [0x32a378]` (= `.rdata 3d cc cc cd` = **exactly 0.1f**),
+`test ah,5`, `jp skip`; then the same compare for `dz`. Substitution happens only when **both** are below 0.1:
+
+    5aff7  c7 44 24 3c 00 00 80 3f   mov dword ptr [esp + 0x3c], 0x3f800000   ; dx := 1.0
+    5afff  c7 44 24 44 00 00 00 00   mov dword ptr [esp + 0x44], 0             ; dz := 0.0
+
+Recording honestly: the comparisons are *signed* (`jp` ⟺ ST ≥ src, §11d), so this guard fires whenever both
+components are merely **less than** +0.1 — an object due south-west at several yalms satisfies it too and would be
+aimed at heading 0 rather than skipped. Whether that is retail's intent or a slipped `fabs` needs the class behind
+`0x100627D0`: **[I]**, settling read = identify that class and what its `[vt+0x1BC]` record holds (position vs a
+unit direction).
+
+*Angle.* Helper **`0x5DFF0`** = `fld [esp+4]; fld [esp+8]; fpatan`; with the callsite pushing `dx` @`0x5B015` then
+`dz` @`0x5B01F`, that is **atan2(dz, dx)**, negated at `0x5B02E` (`d9 e0`) ⇒ `want = −atan2(dz, dx)`, the same sign
+convention as M10's facing law. It is then differenced against the *accumulator*:
+
+    5b036  ff 92 c0 01 00 00   call dword ptr [edx + 0x1c0]     ; self angle record (-> actor+0x61C)
+    5b040  d8 60 04            fsub dword ptr [eax + 4]         ; diff = want - acc(+0x620)
+    ...                    single ±pi wrap with the same triple
+
+*The two stores — this is what §14.3 got wrong.* `fabs(diff)` goes through setter **`0x5E7C0`** (`mov [ecx+0x870], eax`)
+at call site `0x5B08F`. The second store is **not the signed Δ**:
+
+    5b007  8b 8e 88 00 00 00   mov  ecx, dword ptr [esi + 0x88]      ; current script record
+    5b016  d9 41 08            fld  dword ptr [ecx + 8]              ; authored float at record cursor +8
+    5b019  d8 0d f4 a9 32 10   fmul dword ptr [0x1032a9f4]           ; this layer's pi/180: bits 3c 8e f9 21 = 0.017452778
+    5b020  d9 5c 24 1c         fstp dword ptr [esp + 0x1c]           ; scratch (rate, radians/frame)
+    ...                    sign-select against diff vs 0.0 (@0x5B094..0x5B0AB: fabs/fchs idiom)
+    5b0af  8b 44 24 14         mov  eax, dword ptr [esp + 0x14]
+    5b0b6  e8 15 37 00 00       call 0x1005e7d0                      ; -> [ecx + 0x874]
+
+So **`actor+0x870 = |diff|` (how far) and `actor+0x874 = authored rate in radians/frame, signed toward the target`**
+(how fast). Both setters have exactly one caller each (`xref.py --to 0x5E7C0 / 0x5E7D0`: 1 reference apiece, both
+inside `0x5AF2C`), and the only other writers of those two fields in this class are constructor/initialiser blocks
+— `0xC628D/0xC6293` (immediately after `[+0x86C] ← 0` @`0xC6287`, in the same block that zeroes `+0x858..+0x8B6`) and
+a second init at `0xAC960/0xAC966`. Same-offset hits in `0x156D32…`, `0xACBBD`, `0xAD3xx` and `0x220010` are other
+classes (no script record, int operands), excluded.
+
+*Nuance for §14.5.* The duration goes through the ctx-scaled fetcher family (`call 0x1005e590`, one of §14.5's
+thunks) but this authored **angle** operand is read straight from the record and multiplied only by π/180 — it does
+**not** carry the `ctx+0x9C` factor. §14.5's "angles scaled as well" wording should be read as frame counts scaled;
+stage `0x62`'s rate is not scaled. **[V]**
+
+### 15.6 Consumer law re-read — §14.6 confirmed, its overshoot sentence corrected **[V]**
+
+The four gates are at `0xC6693..0xC66C4`, in this order (`esi` = actor, `eax` = its vtable):
+
+    c6693  ff 90 18 03 00 00   call dword ptr [eax + 0x318]     ; owned by a HoldRotation?
+    c6699  85 c0 / 0f 85 a9 08 00 00   test/jne 0xc6f4a         ; -> no turn consumption at all
+    c66a1  8a 86 02 01 00 00   mov  al, byte ptr [esi + 0x102]
+    c66a7  84 c0 / 0f 85 9b 08 00 00   test/jne 0xc6f4a         ; -> skip
+    c66af  83 be a4 07 00 00 ff cmp  dword ptr [esi + 0x7a4], -1
+    c66b6  0f 85 8e 08 00 00   jne  0xc6f4a                     ; -> skip
+    c66bc  8b 86 6c 08 00 00   mov  eax, [esi + 0x86c]          ; turn-enable counter (§15.5)
+    c66c2..c66c4 test / je 0xc67df                              ; 0 -> the M27 turn-toward branch
+
+The arithmetic tail (`0xC6739..0xC67DA`, verbatim from this build):
+
+    c6739  d9 86 74 08 00 00   fld  [esi+0x874]                 ; step
+    c673f  d8 1d d8 95 32 10   fcomp [0.0]                       \
+    c6745  d9 86 74 08 00 00   fld  [esi+0x874]                   | fabs(step) via conditional fchs
+    c674b..c6752 fnstsw / test ah,5 / jp / fchs                  /
+    c6754  d8 ae 70 08 00 00   fsubr [esi+0x870]                ; rem = P - |step|      (FCOM does not pop)
+    c675a  d8 15 d8 95 32 10   fcom  0.0                        ; rem vs 0
+    c6765  7a 6d               jp   0xc67d4                     ; rem >= 0 -> straight to the clear, NO extra term
+    c6767  d9 86 74 08 00 00   fld  [esi+0x874]                 ; overshoot path: step vs 0 ...
+    c677c  d9 e0               fchs                             ; ... so the leftover is negated for step < 0
+    c677e  d8 86 20 06 00 00   fadd [esi+0x620]                 ; acc += (rem or -rem)
+    ...                    second ±pi wrap of acc
+    c67ce  d9 05 d8 95 32 10   fld  0.0
+    c67d4  d9 9e 70 08 00 00   fstp [esi+0x870]                 ; clear pending magnitude (both paths)
+
+**Correction of §14.6's sentence "a positive overshoot doubles its contribution, a negative one cancels".** There is
+no second add of `+|d|`: the extra term is the **leftover `rem = P − |step|`**, added with the sign chosen so it
+*subtracts from* the travel. Net displacement in that frame is exactly **P** toward `sign(step)` — no doubling, no
+cancelling: acc entered the frame at `h0`, got `+ step` (`= s·m`, `m > P`) at `0xC66E9`, then receives
+`s·rem = s·(P − m)`, giving `h0 + s·P`. kuluu matches this by construction (its test asserts exact-P landing).
+
+### 15.7 Consequences for kuluu — what landed, and what stays **[I]**
+
+Landed (`kuluu jw-stack-815 01fb6e42`, paired with this section): stage `0x2F` → `StageKind::HoldRotation` (an
+orientation hold that suppresses the wire→orientation take, counting authored whole frames and releasing on
+destruction as well as at zero); stage `0x62` → `TurnToward`, arming `{remaining = |diff|, step = authored
+degrees × this layer's π/180 signed toward the target}` plus an enable window from the companion countdown,
+consumed in the actor tick with integer-frame stepping and the exact-P back-off, no easing.
+
+Four kuluu-side modelling choices in that commit are **not** proven by retail bytes and must be read as such:
+
+1. The hold applies to remote actors only (`PredictSample::orientation_hold_frames`); a local player's facing has
+   no wire→orientation copy of its own to skip, so there is nothing for the hold to suppress. If the DL's local
+   path turns out to share that copy, this is wrong — settling read: `0x8FBB1..0x8FC22` reached from which entity
+   kinds.
+2. Overlapping holds extend one countdown float instead of nesting a refcount. Retail nests (`[+0x838]++/--`,
+   floor 0); the observable difference is only for two concurrent `0x2F` stages on one actor.
+3. The enable counter is modelled as a list of companion countdowns (one per firing). That *is* what retail has —
+   one companion task per `0x62` with its own `+0x74` — but each firing also **overwrites** the pending pair, which
+   kuluu reproduces; consumption requires the list non-empty rather than a counter > 0.
+4. Step accumulation counts whole retail frames (30/s at the default cap) rather than scaling by wall time, in
+   line with this layer's other authored-per-frame laws (`zone_sfx`, `zone_clouds`). Consequence: kuluu is
+   frame-rate independent where retail-at-60 fps would run the same turn twice as fast. Whether retail intends
+   that follows from the quantum itself (M29: integer counts of 1/60 s, `2.0` per frame at the default cap), which
+   is already recorded — so this choice makes kuluu match retail-at-30-fps behaviour at any refresh.
+
+Still open on this row (unchanged by §15): who *renders* facing from `actor+0x61C..+0x628` (§14.6 "still open").
+§15.4 shows the accessor hands out a pointer to that record and §15.3/§15.6 show its writers, but no consumer was
+found that composes a world orientation from it — kuluu lands the value on its own facing-field chain, and that is
+a kuluu choice, not a proven-identical landing site. Also open: `[actor+0x102]` and the third writer of
+`[actor+0x7A4]` (§14.3), both left at their constructor values in kuluu with these names as the settling reads.
