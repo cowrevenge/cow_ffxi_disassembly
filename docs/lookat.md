@@ -279,6 +279,74 @@ The accept test re-read once more so the two reads meet in the middle: 0xD5BB8..
 
 **What §B-ter's `[I]` still lacks:** attributing each store site to a message opcode. This section shows one writer lives inside the handler that decodes `look.size`, and what that handler is byte-visible to read: `word[esi+8]` indexes the global entity table, `word[esi+0x32]` drives a range test (band 0x213..0x228 @0x9C9DD/0x9C9E4) whose result lands on record byte `+0xEF`, and `test byte ptr [esi + 0xa], 0x10` gates the tail of the SubKind-1 arm (0x9C976). §M maps that bit to a SendFlg equipment flag **[web]**. Confirms via `tables_functions.csv` that no function seed exists between `0x9B550` and `0x9CEB0`, so the enclosing handler entry is above `0x9C8E0` and still unattributed. Settling read unchanged: walk back from 0x9C907 to the prologue, then match that entry against the packet dispatcher's table.
 
+## B-quinquies. The mode float `+0x854` and its two flag bits — complete writer census, hold semantics **[V(me)]**
+
+Pass of 2026-10-06 (same pass as §B-quater), against `C:/tmp/ffximain_work/FFXiMain.unpacked.dll`, TDS `0x6A995428`. This closes the hold-bit half of gap row A6.
+
+**The walker's mode decision, byte for byte (top of `0xD5B10`).** The flag word is read once and tested as a pair of masks; the mask-0x1 case additionally requires mask 0x2 to be clear:
+
+```
+0xD5B38  c7 86 54 08 00 00 00 00 80 bf   mov dword ptr [esi + 0x854], 0xbf800000   ; -1.0 release
+0xD5B49  8b 86 40 08 00 00               mov eax, dword ptr [esi + 0x840]
+0xD5B4F  8b c8                          mov ecx, eax
+0xD5B51  83 e1 01                       and ecx, 1                     ; mask 0x1 (hold)
+0xD5B54  80 f9 01                       cmp cl, 1
+0xD5B57  75 13                          jne 0xd5b6c                    ; no hold -> acquire target
+0xD5B59  a8 02                          test al, 2                     ; mask 0x2 (suppress) must be clear
+0xD5B5B  75 0f                          jne 0xd5b6c
+0xD5B5D  c7 86 54 08 00 00 00 00 80 3f   mov dword ptr [esi + 0x854], 0x3f800000   ; +1.0 hold
+0xD5B67  e9 42 01 00 00                 jmp 0xd5cae                                 ; skip acquisition entirely
+```
+
+So **hold = mask 0x1 set AND mask 0x2 clear**, and its effect is control flow, not arithmetic: the jump to `0xD5CAE` re-enters the pass *after* target acquisition, feeding the previously stored look point (`+0x848/+0x84C/+0x850`) downstream with mode +1.0 — i.e. "keep aiming where I was told to aim, do not chase a target". §B's summary said "hold = bit 0 of actor+0x840"; the mask-0x2 precondition is new detail from these bytes **[V(me)]**.
+
+**Every writer of the mode float `+0x854` in `.text` (19 sites on that displacement; the ones that are this field):**
+
+| value | site(s) | when |
+|---|---|---|
+| `-1.0` (`0xbf800000`) | 0xD5B38 | early-out predicate `0x84670` true (release before anything else) |
+| `-1.0` | **0xC5E5B** (`mov [esi+0x854], ebp`, with `mov ebp, 0xbf800000` @**0xC5DE3**) | field reset/init block — the resting value is *release*, not aim |
+| `+1.0` (`0x3f800000`) | 0xD5B5D | hold, as above |
+| `0` | **0xD5CA4** | written immediately after a fresh look point is computed (see below) — the ordinary "aim" state |
+| from stack args | 0x880E0 (`mov [eax+0x854], edx`) and **0x8821B** (same shape, in the `0x87E40` method's hold installer) | record-side aim request; see below |
+
+`0xD5CA4`'s neighbourhood confirms §B and gap row A1 exactly as kuluu ports them: attach point **3** (`push 3 / call [eax + 0x1c4]` @**0xD5C64/0xD5C68**), then `cmp word ptr [edi + 0xb2], 0 / je skip / fsub dword ptr [0x1032a404]` @**0xD5C7A..0xD5C84** — and `[0x1032A404] = 1.2f` read from `.rdata`, so y −= 1.2 only when the target's WORD at +0xB2 is non-zero **[V(me)]**. The struct handed downstream also carries an explicit mode of 0 (`mov dword ptr [esp + 0x1c], 0` @**0xD5C72**), which pairs with `+0x854 = 0` at 0xD5CA4.
+
+**mask 0x2 (suppress) — set and cleared by a scheduler task, not by game logic.** Both live in methods of one task class whose vtable pair `.rdata 0x1032BA34` / `0x1032BA18` is installed at `[task+0]` and `[task+0x34]` (a paired outer/inner object):
+
+```
+0x5F4A2  8b 88 40 08 00 00   mov ecx, dword ptr [eax + 0x840]
+0x5F4A8  83 c9 02            or ecx, 2                                  ; SET mask 0x2 (suppress look-at)
+0x5F4AB  89 88 40 08 00 00   mov dword ptr [eax + 0x840], ecx
+
+0x5F685  8b 88 40 08 00 00   mov ecx, dword ptr [eax + 0x840]
+0x5F68B  83 e1 fd            and ecx, 0xfffffffd                        ; CLEAR mask 0x2 (task teardown)
+0x5F68E  89 88 40 08 00 00   mov dword ptr [eax + 0x840], ecx
+```
+
+The setter method (`0x5F3EC`) also stores an authored duration into `[task+0x74]` (`fild [esp+0x18]` → `fstp [edi+0x74]` @**0x5F469/0x5F47A**) — the same duration slot §15 records for stage `0x2F`'s HoldRotation task, which is how this belongs to the authored-stage family rather than to per-frame game code. That is the byte-level confirmation of what §B had already established functionally (an action/emote stops the head, then it resumes), and it means kuluu's existing `StageKind::LockLookAt` suppression **is** mask 0x2: no separate mechanism should be added for it **[V(me)]**.
+
+**mask 0x1 (hold) — one setter, one clearer, both located.**
+
+```
+0x88227  8b 86 40 08 00 00   mov eax, dword ptr [esi + 0x840]
+0x8822D  0c 01               or al, 1                                   ; SET mask 0x1 (hold)
+0x8822F  89 86 40 08 00 00   mov dword ptr [esi + 0x840], eax
+
+0x87F58  8b 81 40 08 00 00   mov eax, dword ptr [ecx + 0x840]
+0x87F5E  24 fe               and al, 0xfe                               ; CLEAR mask 0x1
+0x87F60  89 81 40 08 00 00   mov dword ptr [ecx + 0x840], eax
+
+0xC5E1E  8b 86 40 08 00 00   mov eax, dword ptr [esi + 0x840]
+0xC5E24  24 fc               and al, 0xfc                               ; CLEAR mask 0x1 AND 0x2 (field reset)
+0xC5E2B  89 86 40 08 00 00   mov dword ptr [esi + 0x840], eax
+```
+
+The setter sits in a block of the record-side method **`0x87E40`** — entered as a thiscall on the entity record (`mov ecx, [idx*4 + 0x10480af0] / call 0x87e40` @**0xBD6B1/0xBD6B8**, plus one tail-jump from `0x87EF0`), never called with arguments from the walker. That method is where the look point is built from an attach-point request: `movsx ecx, word ptr [esi + 0x148] / push &out / call [edx + 0x1c4]` @**0x88163..0x88174** (the same vt+0x1C4 accessor the walker uses at 0xD5C68, but indexed by a stored word instead of the literal 3), then two y-offset rules — `fsub [1.2]` gated on `[ent+0x120]` bits 14|15|17 (`mov dx,[esi+0x146] / shr ecx,0xf / shr edx,0xe / shr eax,0x11 / or cl,dl / or cl,al / test cl,1`, @**0x88188..0x881AC**), and a scaled `y −= 1.2 × vt+0x110()` (or × `[edi+0x754]` when that call returns < 0) @**0x881C0..0x881EF**. Then the look point is stored to `+0x848/+0x84C/+0x850`, mode from a stack local to `+0x854`, and mask 0x1 set.
+
+Read together: **mask 0x1 means "the aim currently installed came from a record-side request, so the walker must not overwrite it by re-acquiring the target".** kuluu has no record-side aim installer, which is why nothing in kuluu corresponds to mask 0x1 today and why adding one would be invented state. What remains unread, with its settling read named: (i) which of `0x87E40`'s paths store the mode argument consumed at `[esp+0x2c]` (`mov [esp+0x2c], ecx` @**0x87FF2**, `mov [esp+0x2c], eax` @**0x8803A**) — settle by reading those two blocks' producers; (ii) who sets the stored target word `[esi+0x146]/[esi+0x148]` — settle with a `--disp 0x146/0x148 --size 2` census. Neither gates kuluu behaviour while no record-side installer exists.
+
+**Census method, so the negative results are checkable.** `.text` linear sweep (`common.sweep_text`, 1,176,352 instructions): 28 write-form sites to `[reg+0x840]` (all read; masks listed above), 3 direct `test` ops on it (0xC87AF mask 0x400000, 0xCB9B6 mask 0x6000000, 0xD6D34 mask 0x80000 — a different bit family), and no `bts` anywhere near it. No odd-immediate OR writes to the dword other than `or al,1` @0x8822D; the two direct ops are mask 0x40000 (`or` @0xD6223) and its clear (`and 0xfffbffff` @0xD60A7). A whole-image scan for four-byte values in `[0x10087E00,0x10088300)` finds exactly **one** pointer (at file offset `0xAA4C54` -> `0x10088100`), so those blocks are *not* reachable through any function-pointer table — they are branch targets inside one large method, which is why a caller census returns nothing for them.
 ## B-bis. The `actor+0xB2` visibility/flag WORD — full `.text` census (pass of 2026-10-05, for gap row A1)
 
 §B's look-point branch (`y −= 1.2f` when `target+0xB2 ≠ 0`) needs the field understood before it is
