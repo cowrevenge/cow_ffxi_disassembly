@@ -511,6 +511,35 @@ accessors interrogating actions 6/7 (see §10c), so this is another device's aim
 at `1.0f` (`[0x1032961c]`, 0x1EC35), so eye placement uses planar distance while the caller's normalisation used the
 full 3D norm — a real difference at steep pitch, small in magnitude.
 
+### 10b-ii. The free-run predicate behind the distance normalisation (M35) — pass of 2026-10-06 **[V]**
+
+§10b left one read open: which body the `IsFreeRun` slot has, and what it depends on. It is a single actor byte.
+
+```
+0xA4670  8a 81 f9 00 00 00   mov al, byte ptr [ecx + 0xf9]   ; IsFreeRun (vt+0x330)
+0xA4676  c3                  ret
+```
+
+`tables_vtables.csv` / `xref_vtable.py` put this body in slot `+0x330` of the twelve PC-actor vtables (`0x1032D710` family); the two non-skeleton classes in that slot return a constant 1, so only actors carry the flag. At the orbit site (§10b law 1) it is used as a **boolean**, not a number — `test al,al` immediately after the call and `jne 0x1f0a2` skips the whole normalising block:
+
+```
+0x1F036  ff 90 30 03 00 00   call dword ptr [eax + 0x330]      ; IsFreeRun of the followed actor
+0x1F03C  84 c0               test al, al
+0x1F03E  75 62               jne 0x1f0a2                        ; free-run: skip the scaling below
+0x1F040 ..0x1F076            dot(eye-lookat) -> sqrt           ; distance
+0x1F07B  d8 15 18 9a 32 10   fcom dword ptr [0x10329a18]       ; floor 0.01
+0x1F090  d9 05 e8 a3 32 10   fld dword ptr [0x1032a3e8]        ; 6.0
+0x1F096  d8 f1               fdiv st(1)                        ; 6.0 / max(dist, 0.01)
+0x1F098  d8 4c 24 10         fmul dword ptr [esp + 0x10]       ; delta *= that ratio
+```
+
+So the normalisation applies **only when the byte is zero**, and a non-zero byte gives §10b's flat `tick x axis x .rdata 0x32A3EC` at every radius. The default is non-zero: the actor constructor writes `mov byte ptr [esi + 0xf9], 1` @**0xA8A1C**, so retail's ordinary state is free-run and the orbit rate is radius-independent (the shipped case).
+
+The same slot is consulted three more times in the same function before the azimuth delta is handed to rotator `0x1EBB0`, each as a boolean, and it is the gate for the zeroing rules M30 records: at **0x1F0A6** (free-run and `[0x10456D7C] <= 0` → `mov dword ptr [esp + 0x10], 0`, i.e. no azimuth this frame) and at **0x1F109** (the eye-height law's partner gate, 0x1F111/0x1F126). It is also read outside the camera: a store in `0xC5CAE`'s neighbourhood tests it before calling `0x157660`, and the walker-side sites at 0xA5E64/0xA66E9/0xA689D/0xA6C72/0xA6F4D/0xA7365 call the same slot.
+
+**What writes it, and why kuluu cannot see the other arm yet.** `.text` sweep of byte writes to `+0xF9` gives exactly eight sites (plus one getter): constructor `0xA8A1C` (= 1), a setter `0xA4660` (`mov al,[esp+4] / mov [ecx+0xF9],al`, i.e. an external bool), and five joint-curve writers `0x4ABAE`, `0x4BCE3`, `0x4BCF8`, `0x4F591`, `0x4F70C`. Those five are one law: index a 64-entry table (`mov eax,[ebp] / shr eax,0xd / and eax,0x3f` @**0x4BCB6..0x4BCC0**), read its float, scale by `.rdata 0x10329A20` (**= 255.0f**), round through `0x311c2c`, mask `& 0xff`, store — with the special case that a curve value ≤ 0 stores **0** (so zero is authored, not incidental). A **sibling channel at `+0xFA`** is written by the same blocks. Elsewhere the byte is consumed as an integer weight (`mov dl,[ebx+0xF9] / fild` then multiply, e.g. **0x4AE6F**), so it is genuinely 8-bit for those consumers while the camera still tests it as a boolean: any non-zero curve value keeps the actor free-running as far as the orbit law cares **[V]**.
+
+Landed in kuluu as `jw-stack-815 e9c694d3`: `camera_orbit_yaw_rate_rad_per_sec` took over `FOLLOW_ACTOR_FREE_RUN_DEFAULT` (true = retail's constructor value) and normalises only when the flag is cleared; kuluu does not parse the joint-curve channel yet, so that arm stays unreachable exactly as it is in a client without authored motion. The prior test asserted tangential-speed-constancy at default radius (the wrong law for the shipped state) and was replaced rather than left passing **[local]**.
 ## 10c. The action table behind the aim axes (M31)
 
 **M31 [V].** Closes §16's "GetAnalogKey full decode", kills the phantom *device* column, and names where
@@ -1322,6 +1351,7 @@ is in [target_track.md](target_track.md) §6.
 | M32 | [V] | The spring reference is walker-owned and camera-read: one setter `0x1E2F0` writes `[0x10456DB0]` mode + `[0x10456DB4]` angle (stores at 0x1E314/0x1E319); its only seven callers are the reset `0x1E685` and six walker steer-branch sites (`0xA6998 A69AA A6A1A A6A46 A6A5D A6C29`); the camera reads it once (`fld/fchs` at `0x1F18E`, gate `[0x10456DB0]`, scaled `6.0/max(dist, .rdata 0x329A18)` into applier `0x1EBB0`) behind predicates `0x25E050` (`[[0x1066276C]+0x44]==2`) and `vt+0x330`. **No camera-side lock-on orbit exists** — while locked the reference is the walker’s own per-frame turn | §10d |
 ## 15. Kuluu conclusions (for the walker rework)
 | M34 | [V] | Zoom has ONE rate and TWO durations, all re-read this pass. Same expression in four arms: `tick x 6.0`, `.rdata` RVA 0x32A3E8 (`40c00000`). Key arm in: device 0x3F action 0x4F via getter 0x123A70 @0x1F81A, `call 0x152C0` focal / `call 0x14CF0` tick / `fmul [0x1032a3e8]` (0x1F834) / `fadd` (0x1F83A), clamp compare vs 900.0 @0x1F842 -> imm store 0x44610000 @0x1F855; key arm out: action 0x50 tested @0x1F86A, `fsubr` @0x1F88A, clamp vs 242.0 -> imm 0x43720000 @0x1F89F — continuous every frame held, no edge or notch conversion; BOTH key arms then reach the accumulator clear `call 0x1025e230` (0x1F8A7 and via join 0x1F945) before setter 0x15290. Wheel arms gated by `call 0x1025e050` = `[[0x1066276C]+0x44]==2`; +acc arm focal step @0x1F8D5..0x1F8E0 with clear only on its clamp store (@0x1F8FF), -acc arm @0x1F91D..0x1F928 (clamp 242 -> clear via 0x1F93D->0x1F945); `jle`@0x1F8CA / `jge`@0x1F912 make the arms exclusive, so exactly one step per frame regardless of magnitude — notches buy frames (acc += 2/notch). Drain 0x25E240 (`jmp` thunk 0x25E0E0) has exactly ONE call site in the binary: `call 0x1025e0e0` @RVA 0x1295A inside frame function 0x121BD, unconditional. Both-keys ease bracket `-1 < ease < 1` around `(350-focal) x 0.25`; flag convention fixed by two unambiguous sites (tick getter 0x14CF0 = max(tick,1); tick-writer divisor clamp 0x12C57). Kuluu `jw-stack-815 02766871`: one law fn + WheelZoom counter; deleted FOCAL_RATE_PER_SEC-as-per-second (25× slow) and the inverted key sign (§11d) |
+| M35 | [V] | The distance normalisation of M30's azimuth law is gated by one actor byte: `vt+0x330` IsFreeRun = 0xA4670 (`mov al,[ecx+0xF9]`), tested as a boolean at the orbit site (0x1F036/0x1F03C/0x1F03E `jne 0x1f0a2`) so the `6/max(dist,0.01)` scaling runs only when it is zero; ctor writes 1 (0xA8A1C) -> shipped state is free-run = radius-independent rate; writers are five joint-curve stores of `round(curve x .rdata 0x329A20=255.0) & 0xff` (0x4ABAE/0x4BCE3/0x4BCF8/0x4F591/0x4F70C, curve<=0 stores 0) plus a bool setter 0xA4660; sibling channel at +0xFA; other consumers treat it as an 8-bit weight (fild at 0x4AE6F). kuluu `e9c694d3` | §10b-ii, gaps C6 |
 
 - Kill auto-recenter-follow: the camera is free; it re-anchors only on input (M11).
 - Movement is camera-anchored polar: rotate the raw input by the camera azimuth,
@@ -1353,7 +1383,7 @@ is in [target_track.md](target_track.md) §6.
 - ~~0x123970 (GetAnalogKey) full decode~~ — **closed by M31 (§10c)**: arg-2 is the action id, the gate word `.data 0x1036CF60[action*2]` is a device bitmask and there is no device argument. Actions 8b/9a/b/c, 0x79..0x7C, 0x4F/0x50 and 0x16..0x19 are now in the census table; the remaining un-censused ids are unread (they gate nothing in movement.md).
 - Which input mode `byte[[0x104E1D4C]+0x4d]` a default-configured client carries, and what `CFsConf6Win` (0x25E050)/fn 0x25E040 mean beyond gating the mode-4/mode-5 split. Settling reads: the writer of that byte (config load path) and one bounded read of both bodies. Matters only for which *source* a player sees (M31).
 - Who sets `byte[[0x104DFD98]+0x4194]` — the flag that makes actions 4/5 return 0.0 unconditionally (M31). Settling read: writes of `+0x4194` on that object.
-- ~~M30 law 1: which arm carries the distance normalisation, and whose slot is the predicate~~ — **both closed**: `jne 0x1f0a2` (bytes `75 62`) jumps over the scaling block, so it runs **only when IsFreeRun is false** (parallel/strafe) and retail holds a flat 1.675 rad/s while free-running; §11 M18 independently records the same polarity for the spring consumer. The slot belongs to arg-1 of 0x1EE60 (the followed actor), not the camera manager. kuluu always normalised (`jw-stack-815 d232f504`) — corrected in the follow-on kuluu commit; remaining read to upgrade §12's row from [local]: one body of that vtable slot.
+- ~~M30 law 1: which arm carries the distance normalisation, and whose slot is the predicate~~ — **both closed**: `jne 0x1f0a2` (bytes `75 62`) jumps over the scaling block, so it runs **only when IsFreeRun is false** (parallel/strafe) and retail holds a flat 1.675 rad/s while free-running; §11 M18 independently records the same polarity for the spring consumer. The slot belongs to arg-1 of 0x1EE60 (the followed actor), not the camera manager. kuluu always normalised (`jw-stack-815 d232f504`). **Closed 2026-10-06 by M35 (§10b-ii)**: the slot body is `mov al, byte ptr [ecx + 0xf9]` (0xA4670), the constructor initialises that byte to 1, and it is authored motion's curve channel that clears it — so kuluu's shipped default must be the *flat* rate; corrected for real in `kuluu jw-stack-815 e9c694d3`, with gaps row C2 (below) recording what stays unread.
 - The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
 - 0x85240/0x85270 candidate-actor iteration semantics (spatial hash?).
 - Whether 0x487F74 (constant `ecx` arg to 0x81550/0x814F0) is the follow-actor slot.
