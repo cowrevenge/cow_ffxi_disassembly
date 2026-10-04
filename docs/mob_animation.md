@@ -80,7 +80,7 @@ implements, and their stage contents.
 | 0xBB1A60 / 0xBB1AFB | POL1 entry stub / LZSS unpacker; real DllMain @0x31676F | F24 |
 | 0x480B30 | global entity table (stride 4, indexed by target index; sentinel VA 0x10482F30) | F28, F30 |
 | 0x9BCF7 | s2c 0x0E field-packing core (status u32 -> RF0, sub -> RF1, StatusServer <- anim byte) | F30, F43 |
-| 0x9C917 / 0x9CE98 | 0x0E SubKind dispatch / jump table -> Type byte (+0xEE) setters | E20 |
+| 0x9C917 / 0x9CE98 (TDS 0x6A7297F5); **0x9C916 / 0x9CE88 in TDS 0x6A995428** | 0x0E SubKind dispatch / jump table -> Type byte (+0xEE) setters — current-build table in [lookat.md §B-quater](lookat.md) | E20 |
 | 0x8F750 .. 0x926C7 | per-entity update routine (thiscall, ecx = XiAtelBuff*); create dispatch @0x8F7FF; PopEffect block @0x90A31 | F28, F35 |
 | 0x95DB0 | flush wrapper: RF3 bit 0 -> destroy + update/create; call sites @0x95A58/0x95AEA/0x95BAB, rate-limited by counter 0x487E8C vs 0x35AF48 | F35, F36 |
 | 0x92910 (in func 0x928A3) | actor destroy entry, 23 call sites; gates on RF0 0x200 | F32, F34 |

@@ -401,6 +401,11 @@ The entity Type byte (ent+0xEE, the gate of E4/E5 and of F28/F35/F37) is written
 handler's SubKind dispatch @rva 0x9C917: `byte [esi+0x30]` (header-inclusive; body+0x2C) & 7 ->
 jump table @rva 0x9CE98 (eight entries verified by direct read):
 
+> **Build note.** Every RVA in this section and in `event_evidence.md` §§M.2/M.5/M.6 is from the
+> 0x6A7297F5 image above. In the current install (TDS 0x6A995428) this dispatch sits at **0x9C916**
+> with jump table base **0x9CE88**, and each Type store is −0x10 as well; that version was re-read
+> byte-by-byte in [lookat.md §B-quater](lookat.md), which is authoritative for the current build.
+
 | SubKind | Block | Type | Extra |
 |---|---|---|---|
 | 0 | 0x9C9AC | 2 (@0x9C9C7) | |

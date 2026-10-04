@@ -237,6 +237,48 @@ type-3/4/5. So the target-type gate reads: *doors, lifts and models are never lo
 Which message opcode reaches each handler is **[I]**; settling read = attribute each store site to its
 handler entry (tables_functions.csv seeds) and trace those through the packet dispatcher.
 
+## B-quater. The producer of `+0xEE`: the packet-`0x0E` SubKind dispatch, re-read in this build **[V(me)]**
+
+Pass of 2026-10-06 against `C:/tmp/ffximain_work/FFXiMain.unpacked.dll` (TDS `0x6A995428`). §B-ter censused the writers; this section reads one of them end to end, because it is the handler that *defines* what the Type byte means — it puts a producer under the accept set in §B.
+
+**Which image owns which RVA (read this first).** `docs/event_vm.md` §M and `docs/event_evidence.md` §§M.2/M.5/M.6 record the same dispatch at **0x9C917 / jump table 0x9CE98**, stores at `0x9C9C7/0x9CB82/0x9CC21/0x9CC8E/0x9CD57/0x9CDC1/0x9CE6D`. Those belong to the earlier target image (`FFXiMain.dll`, 2,901,584 bytes, TDS `0x6A7297F5`) and agree with §event_vm's own note that this cluster sits about −0x10 in the current install. They do **not** decode here: cells read from `0x9CE98` in this image return `0x90909090` padding. For TDS `0x6A995428` the authoritative values are the ones below (**dispatch 0x9C916, table base 0x9CE88**).
+
+The dispatch (raw bytes then decode):
+
+```
+0x9C907  8a 46 30                 mov al, byte ptr [esi + 0x30]   ; look.size
+0x9C90A  83 e0 07                 and eax, 7                      ; SubKind = low 3 bits
+0x9C90D  83 f8 07                 cmp eax, 7
+0x9C910  0f 87 66 05 00 00        ja 0x9ce7c                      ; -> an epilogue; unreachable (mask <= 7)
+0x9C916  ff 24 85 88 ce 09 10     jmp dword ptr [eax*4 + 0x1009ce88]
+```
+
+Jump table `.rva 0x9CE88` (little-endian VAs, read directly from this image) and the Type store each arm performs (`mov byte ptr [record + 0xee], imm8`; `record` comes from `mov eax, dword ptr [idx*4 + 0x10480af0]` with `idx = word[esi+8]`, i.e. the global entity table §B-ter already names):
+
+| SubKind (`look.size & 7`) | LSB MODELTYPE | arm RVA (via table cell) | Type stamped | store site + raw bytes |
+|---|---|---|---|---|
+| 0 | STANDARD (NPC/mob) | cell `0x9CE88` -> 0x9C99C | **2** | 0x9C9B7 `c6 80 ee 00 00 00 02` |
+| 1 | EQUIPPED (PC-look) | cell `0x9CE8C` -> 0x9C91D | **1**, or **0** on the flag branch below | 0x9C96F `c6 80 ee 00 00 00 01`; alternate 0 @0x9C94F `c6 80 ee 00 00 00 00` |
+| 2 | DOOR | cell `0x9CE90` -> 0x9CB37 | **3** | 0x9CB72 `c6 80 ee 00 00 00 03` |
+| 3 | ELEVATOR | cell `0x9CE94` -> 0x9CBD6 | **4** | 0x9CC11 `c6 82 ee 00 00 00 04` (via `[edx+0xee]`) |
+| 4 | SHIP | cell `0x9CE98` -> 0x9CC43 | **5** | 0x9CC7E `c6 81 ee 00 00 00 05` (via `[ecx+0xee]`) |
+| 5 | UNK_5 | cell `0x9CE9C` -> 0x9CD38 | **6** | 0x9CD47 `c6 80 ee 00 00 00 06` |
+| 6 | AUTOMATON | cell `0x9CEA0` -> 0x9CDA2 | **7** | 0x9CDB1 `c6 81 ee 00 00 00 07` (via `[ecx+0xee]`) |
+| 7 | CHOCOBO | cell `0x9CEA4` -> 0x9CE50 | **8** | 0x9CE5D `c6 80 ee 00 00 00 08` |
+
+Two structural facts that only a byte read gives you:
+
+- **There is no default arm.** Because the index is masked first, all eight cells are live and the `ja` at 0x9C910 lands on an epilogue (`5f 5e 5d b0 01 5b 83 c4 40 c3` @**0x9CE7C**, `ret`, return value 1). So no `look.size` is ever *unclassified*: it is classified mod 8, which means an out-of-enum size silently aliases onto another kind (size 9 -> SubKind 1 -> Type 1). A consumer that does not mask the same way diverges from retail on such a record.
+- **SubKind 1 has two stores**, selected by three conditions: `[ent+0x12C]` bit 30 (`c1 ea 1e / f6 c2 01`) then, in both branches, `[ent+0x120]` bit 5 must be clear (`f6 c1 01`) and `cmp word ptr [eax + 0x210], bp` must match. All hold -> Type **0** @0x9C94F; otherwise Type **1** @0x9C96F, reached through a second copy of the same two tests at 0x9C958..0x9C96F. Both values are in the accepted set, so this branch cannot change whether an entity is aimable — which is why kuluu may collapse it to 1 without changing behaviour. **Still `[I]`: what bit 30 of `ent+0x12C` means** (settling read: xref writers of that dword and match them against the packet fields §event_vm maps for opcode 0x0E). Recorded as an open sub-question, deliberately not chased; it gates nothing.
+
+The consumer, on record so both halves agree: **0x84400** = `8b 41 70` (`mov eax,[ecx+0x70]`) / `85 c0 / 74 08` (null -> global fallback) / `0f be 80 ee 00 00 00` (`movsx eax, byte ptr [eax + 0xee]`) / `c3`, with fallback `a1 10 d6 47 10` = global `[0x1047D610]`. Note the indirection: §B-ter's "`inner+0xEE`" is *not* a field of the actor but one level out, at **actor+0x70 -> record+0xEE**. That plus `mov byte ptr` writes is exactly why a dword-width displacement census returns nothing for it (§B-ter).
+
+The accept test re-read once more so the two reads meet in the middle: 0xD5BB8..0xD5BFB calls `0x84400` six times with `ecx = edi` (the target) and compares against 0/1/2/6/7 and finally **cmp 8 / jne 0xd5cae** @**0xD5BF8/0xD5BFB**, every equality hit joining the chain at 0xD5C01. Read as a rejection list it says *Types {3,4,5} release the aim*, which is exactly DOOR/ELEVATOR/SHIP from the table above **[V(me)]**.
+
+**Landed in kuluu as `jw-stack-815 7738d7ed`**: `LookData::retail_type_of_look_size` (the eight-row table, masked the way retail masks it, extracted so there is one copy — `retail_type()` now delegates to it), all eight `MODELTYPE` constants scraped from LSB rather than only two (`ffxi-vocab/build.rs`, per vendor-scrape: no hand-maintained values), and a precomputed verdict carried on the snapshot actor state that filters where an *observer* resolves its look point (a door in the path of a head turn releases the aim like a status-gate miss, rather than aborting the pass). A mount entry carries its rider's verdict because retail keeps no record for a mount at all — the rider is the entity — so kuluu invents none. Not modelled, on purpose: the SubKind-1 flag branch and bit 30 of `ent+0x12C`, unread as above.
+
+**What §B-ter's `[I]` still lacks:** attributing each store site to a message opcode. This section shows one writer lives inside the handler that decodes `look.size`, and what that handler is byte-visible to read: `word[esi+8]` indexes the global entity table, `word[esi+0x32]` drives a range test (band 0x213..0x228 @0x9C9DD/0x9C9E4) whose result lands on record byte `+0xEF`, and `test byte ptr [esi + 0xa], 0x10` gates the tail of the SubKind-1 arm (0x9C976). §M maps that bit to a SendFlg equipment flag **[web]**. Confirms via `tables_functions.csv` that no function seed exists between `0x9B550` and `0x9CEB0`, so the enclosing handler entry is above `0x9C8E0` and still unattributed. Settling read unchanged: walk back from 0x9C907 to the prologue, then match that entry against the packet dispatcher's table.
+
 ## B-bis. The `actor+0xB2` visibility/flag WORD — full `.text` census (pass of 2026-10-05, for gap row A1)
 
 §B's look-point branch (`y −= 1.2f` when `target+0xB2 ≠ 0`) needs the field understood before it is
