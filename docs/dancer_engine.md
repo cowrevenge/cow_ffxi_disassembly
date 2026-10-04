@@ -182,6 +182,8 @@ Two kuluu deviations this exposes, both in the *blend* path (`ffxi-actor/src/ani
    merge has *no* arc choice at all: shortest arc, always. So once kuluu's channel-level work lands, the long-arc
    arm should go rather than be ported — keeping it means some joints rotate the way round retail never does.
 
+**Both kuluu deviations closed 2026-10-06** (gaps rows D1/D2). `jw-stack-815 ad01f92d` adds `merge_layer_rotation` — this routine transcribed: verbatim copy at t == 1, sign flip on a negative dot, the sum stored with no normalisation — and routes every cross-layer blend site through it (`interpolate_kf`, `interpolate_nullable`, hence `cross_slot_interpolation`); the within-clip key interpolator in kuluu's DAT reader still normalises, because that path has no recorded law. `206ae480` removes the long-arc arm and its front reference outright (`long_arc_mid`, `quat_abs_dot`, `long_arc_is_nearer_front`, `nlerp_arc`, the per-joint set on the transition, `TransitionParams::front_ref` and the renderer's producer for it), with `every_blend_takes_the_short_arc_whatever_the_twist` pinning that a +100°→−100° joint sits on the far side mid-blend.
+
 Not verified, and worth naming before anyone "fixes" the wrong thing: the **key-channel** interpolation (adjacent
 keys *within* one clip) is a different routine from this merge; §4a left its interp-enum read [I], so kuluu's
 renormalising `nlerp` on that path has neither retail confirmation nor refutation. Only the blend-merge sites
