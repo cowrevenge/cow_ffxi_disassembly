@@ -22,7 +22,7 @@ the base view and says nothing about what an overlaid client renders.
 
 **Landed chain on `jw-stack-815`** (oldest first): `5c93cce9` DAT split (row 1) · `087319bd` look point +
 settle rules (row 2) · `acdf77fa` ellipse bend (row 3, opened) · `4dea93d2` second bend bone (row 3 closed) ·
-`a0583409` gates + `0x89` suppression (row 4) · `d8481ee8` focal zoom C1 (row 5) · `5cef95e2` one keyboard aim scale, false tilt law deleted (row 6) · `eeb0ac01` spring default ON + decoupled from the leash row · `7a6b6197` human owns facing: no walker turn rate, one-shot lock square-up, reactor auto-face off · `64b1a0e3` D2 landed-as-verified: same-clip gait requests keep their playhead (caller-side stand-in for xim's identity+lowPriority no-op) + Left/Right moves blend through idle frame 0 (needsInBetweenFrame wired properly; long-arc kept as labelled fallback) · `ea3475c1` D1 landed: crossfades step both layers live (`PreviousSide::Live`; completion handoff lands on the frame the blend sampled) · `4b8f0679` D3 runtime landed (ActorRotation drive-tasks run per fired stage — capture-at-fire, mode-0 hold / countdown ramp, remotes via prediction, self via walker base facing; awaiting Shane's test) · `c6aac843` C3 mouse aim ported to retail's position law (row 9, awaiting Shane's test) · `ec3fc4a4` comment-only: M18 spring-back citation corrected per the retraction · `f32832b4` C1 wheel folded into the focal law, chase-distance zoom path deleted (tests pin both the step and that claimed notches stay out of the camera). `05b2bcc2` withdraws that ordering claim (client no longer aborts at startup; playtest verified) · `a833f942` clears the clippy gate on `rotation_drives.rs`, whose wrap pair is now expressed as exactly twice its bound (bits 0x40C9_0E56 = 0x4049_0E56 with exponent +1). `631a4721` fixes play-test P1 by composing the two look-at bends locally instead of stacking rigid subtree rotations (§G.5, [lookat.md §E.9](lookat.md)). `8679a836` fixes P2: locked movement re-aims at the target every moving tick and the spring consumes that walker turn (§G.6, movement.md §10d/M32). `476ea336` fixes P3: an unkeyed joint keeps last frame’s local transform rather than returning to bind (§G.7, [dancer_engine.md §5b](dancer_engine.md)). `c474e170` clears the workspace’s last clippy warning (a truncated doc comment on `NO_LIMITS`). `01fb6e42` lands row D4's two facing locks — stage `0x2F` as an orientation hold (suppresses the wire->orientation take, releases at zero and on destruction) and stage `0x62` as `TurnToward` ({remaining = |diff|, step = authored degrees × π/180 signed toward the target} + companion enable window, integer-frame stepping with exact-`P` back-off, no easing); `f7894b75` is rustfmt-only. `f0a41fb0` lands row A9: the look-at bend now steers retail's frames (authored attach frames for slots 3/4, one shared point measured in a look-at basis) instead of bone-local axes — that was the "looks down / shoulder bows" symptom; it also carries the clamp transcription from §E.11 and the both-axes-zero record rule. Nothing pushed — jw-stack branch only.
+`a0583409` gates + `0x89` suppression (row 4) · `d8481ee8` focal zoom C1 (row 5) · `5cef95e2` one keyboard aim scale, false tilt law deleted (row 6) · `eeb0ac01` spring default ON + decoupled from the leash row · `7a6b6197` human owns facing: no walker turn rate, one-shot lock square-up, reactor auto-face off · `64b1a0e3` D2 landed-as-verified: same-clip gait requests keep their playhead (caller-side stand-in for xim's identity+lowPriority no-op) + Left/Right moves blend through idle frame 0 (needsInBetweenFrame wired properly; long-arc kept as labelled fallback) · `ea3475c1` D1 landed: crossfades step both layers live (`PreviousSide::Live`; completion handoff lands on the frame the blend sampled) · `4b8f0679` D3 runtime landed (ActorRotation drive-tasks run per fired stage — capture-at-fire, mode-0 hold / countdown ramp, remotes via prediction, self via walker base facing; awaiting Shane's test) · `c6aac843` C3 mouse aim ported to retail's position law (row 9, awaiting Shane's test) · `ec3fc4a4` comment-only: M18 spring-back citation corrected per the retraction · `f32832b4` C1 wheel folded into the focal law, chase-distance zoom path deleted (tests pin both the step and that claimed notches stay out of the camera). `05b2bcc2` withdraws that ordering claim (client no longer aborts at startup; playtest verified) · `a833f942` clears the clippy gate on `rotation_drives.rs`, whose wrap pair is now expressed as exactly twice its bound (bits 0x40C9_0E56 = 0x4049_0E56 with exponent +1). `631a4721` fixes play-test P1 by composing the two look-at bends locally instead of stacking rigid subtree rotations (§G.5, [lookat.md §E.9](lookat.md)). `8679a836` fixes P2: locked movement re-aims at the target every moving tick and the spring consumes that walker turn (§G.6, movement.md §10d/M32). `476ea336` fixes P3: an unkeyed joint keeps last frame’s local transform rather than returning to bind (§G.7, [dancer_engine.md §5b](dancer_engine.md)). `c474e170` clears the workspace’s last clippy warning (a truncated doc comment on `NO_LIMITS`). `01fb6e42` lands row D4's two facing locks — stage `0x2F` as an orientation hold (suppresses the wire->orientation take, releases at zero and on destruction) and stage `0x62` as `TurnToward` ({remaining = |diff|, step = authored degrees × π/180 signed toward the target} + companion enable window, integer-frame stepping with exact-`P` back-off, no easing); `f7894b75` is rustfmt-only. `f0a41fb0` lands row A9: the look-at bend now steers retail's frames (authored attach frames for slots 3/4, one shared point measured in a look-at basis) instead of bone-local axes — that was the "looks down / shoulder bows" symptom; it also carries the clamp transcription from §E.11 and the both-axes-zero record rule. `40e521c5` fixes play-test P4 (draw/sheathe replaying their own last frames) by making the engage transition clips one-shots and ending a loop at its end frame rather than past it; `a782f7ff` adds the KULUU_ANIM_LOG playhead trace plus an ANIM_STALE guard, which found the next defect; `2bd81daa` fixes that — a refused slot handover was still recorded as registered, so nothing asked again and a finished sheathe layer went on owning its bones (§G.8). Nothing pushed — jw-stack branch only.
 
 ## A. Head / neck look-at — symptom **S3** ([lookat.md](lookat.md))
 
@@ -92,9 +92,9 @@ Nothing below needs more DLL work first — the C4 port landed 2026-10-04 (jw-st
    change head/neck bone selection semantics for *all* models? It moves the pivot on non-humanoid rigs, and the
    census says that is what retail does.
 
-## G. Play-test bugs reported 2026-10-05 (kuluu bugs, not DAT/research bugs) **[all three fixed 2026-10-05 — play-test pending]**
+## G. Play-test bugs reported by Shane (kuluu bugs, not DAT/research bugs) **[P1–P3 fixed 2026-10-05; P4 reported and fixed 2026-10-04 — play-test pending]**
 
-Shane's three in-game bugs, stored so any session can run them. The order inside each row is his: work the list, stop
+Shane's four in-game bugs, stored so any session can run them. The order inside each row is his: work the list, stop
 at the first hit; fix at the root; no snap-on-top patches. One commit per fix.
 
 | # | Symptom | Diagnostic order (stop at first hit) | Status |
@@ -102,6 +102,7 @@ at the first hit; fix at the root; no snap-on-top patches. One commit per fix.
 | **P1** | S3 regression: shoulders turn, head does not. Shoulder moving + head still = record 0 bends nothing. Test on **Mithra**. | (a) A5 gate drops record **1**, never record **0** — if inverted, flip it. (b) Head look must still run when the engage leg-split layer is active (applied to `world_pose` after composition). (c) Bend lands on `references[3].index`, not a hardcoded neck joint. (d) Last: dump parsed `(xlim, ylim, scale)` for records 0 and 1 for Mithra — record 0 == (0,0) means the parser **offset** is wrong (accessor `0x3522A`: `data + 0x34 + u16[data+0x32]*30`, then `+4 + u16*26`, then `+0x48`; 12-byte records). | **FIXED `kuluu 631a4721`** — none of (a)–(d) was it: both bends were applied as overlapping rigid world-space subtree rotations, so re-rotating the chest dragged the already-bent neck. Retail composes each bend onto its own bone node (§E.9). Test `both_bends_compound_into_the_head_turn` |
 | **P2** | Locked camera: A/D should circle-strafe *with the camera staying on the target*; kuluu freezes the camera reference at lock time. Retail recomputes it every frame from player->target bearing. | One read then port: in `UpdatePlayerFollowingCamera` (0x1EE60..0x20B9B) find the locked-target branch's store to `[0x10456DB4]` and what it is computed from; record [V]. Port as **reference = live bearing while locked, C4 spring law otherwise — same spring, moving reference. No separate orbit mode.** | **FIXED `kuluu 8679a836`** — read landed as movement.md §10d / M32: exactly one setter, walker-owned; the camera is a pure reader. Ported shape = live bearing while locked + spring consumes that walker turn (§G.6) |
 | **P3** | Weapon floats when turning in place while engaged — weapon not following the hand. | (a) Attach must read the **current frame's** `world_pose` at the hand reference (126/127, `standard_joint_world_position`) every frame, after `advance_actor_pose`; cached-at-draw or read-before-pose gives exactly this float. (b) With `use_battle`, TurnInPlace resolves from the battle set first — confirm resolved chunks key the arm/hand joints; a sparse battle turn clip + `pose_clip_matches` dedup dropping the base arm chunk is the bug. (c) Only if both clean: check the weapon DAT's own animation dir is loaded into `anim_dirs`. | **FIXED `kuluu 476ea336`** — none of (a)–(c): the weapon is skinned to the race skeleton’s weapon joint, and kuluu re-derived every unkeyed joint from bind each frame. Retail persists node state (dancer_engine.md §5b). Test `an_unkeyed_joint_keeps_the_local_transform_it_had_last_frame` |
+| **P4** | `/attack` draws the weapon to the end of the animation and *then plays its last few frames again*; identical at sheathe, same frames at both ends, not specific to `/attack`. | (a) Test it live instead of reasoning: `KULUU_ANIM_LOG=1` on a hidden session, then `/targetbnpc`, `//warp target`, `/attack`, and to disengage `/raw attackoff` (`/cancel` and `/autoattack off` do not disengage — the wire byte does). (b) Scan for a playhead that drops below its previous value while still inside the same clip. | **FIXED `kuluu 40e521c5`; hand-back fixed in `kuluu 2bd81daa`** — neither the routine selection nor the DAT: `in 0`/`out0`'s motion clips were registered as ordinary looping clips, so on the closing step of the overlay window they wrapped to frame 0 and replayed themselves under the crossfade into battle idle (`| ina0:35.50 | -> | ina0:0.00 |`). They are one-shots now (as rest in/out already were) and hold their last authored frame; that exposed `apply_loop_bounds`' strict-`>` end-of-loop compare, which strands a slot whose playhead lands exactly on length (§G.8) |
 
 ### G.1 P1 checklist — what already cleared this pass (kuluu working tree)
 
@@ -197,3 +198,73 @@ Landed `kuluu 476ea336` (`carry_unkeyed_channels`, `FfxiRenderActor::pose_local_
 - `kuluu/src/view_native/input.rs` — the one-shot `lock_aimed` field + its per-target clearing block: state for a
   rule M32 showed to be wrong-by-timing, deleted with an explanation of what replaced it (not silently).
 - `kuluu/src/view_native/camera_collision.rs:317-321` — two stale comments in one block: they asserted the manual-turn value “writes nowhere while locked on… the lock turn owns the yaw” (and, in the sibling comment, “arrow keys do nothing in lock mode”) while that same block fed its own previous-frame correction back as the spring reference — the missing reason is exactly what let P2’s self-feedback be written. Both comments now say what the code consumes and cite M32 (the one global this consumer mirrors is walker-produced). `kuluu 47c04496` (comment-only, after the exe build).
+
+### G.8 P4 result — one pass through a transition clip, and the hand-back nobody asked again (2026-10-04)
+
+Measured on a live session of this machine's stack (`kuluu a782f7ff` driving `KULUU_ANIM_LOG`; Hume battle set,
+transition clips `ina?/otd?` and the ride variant `ota?`):
+
+    ANIM_SEL   ... idl?/bfalse -> ina? tier=EngageOverlay battle=true engage=Drawing { remaining: 36.0 } clips=[ina1 ina0]
+    ANIM_TRACE ... engage=Drawing { remaining: 0.49936202 } step=0.50 | 0:ina0:35.50 1:ina1:35.50| -> | 0:ina0:36.00 1:ina1:36.00|
+    ANIM_SEL   ... ina?/btrue -> btl? tier=Locomotion battle=true engage=Engaged clips=[btl0 btl1]
+
+Before the fix that closing line read `-> | 0:ina0:0.00 1:ina1:0.00|`: the overlay window's last step wrapped the
+transition clip back to frame 0 while the window still held it, so the pull-out played its own opening again under
+the crossfade — and identically at the sheathe edge, because both edges run `advance_engage` plus one register
+block. That is why the same frames appear at both ends and why `/attack` was never special.
+
+Two laws came out of it, both in kuluu (no new DLL reading was needed; nothing here contradicts a byte):
+
+* **A transition clip plays once and holds its last authored frame.** With `num_loops = Some(1)`
+  (`apply_loop_bounds`) the playhead stops at `length` instead of wrapping, so the pose it ends on is what the
+  crossfade blends out from. Rest in/out were already one-shots for the same reason ("looping them replays the
+  kneel from frame 0"). Pinned by `engage_transition_clips_play_once_and_hold_their_last_frame` and
+  `an_overlay_window_longer_than_its_clip_does_not_replay_the_clip`.
+* **Ending a loop is `>= length`, not `>`.** Landing exactly on the end frame left the one-shot incomplete, and a
+  selection change asks for its registration *once*, so the clip queued behind it never arrived; once a context
+  *is* complete every later call returns `length`, which is how a finished pose welds itself into a slot. The same
+  guard makes a zero-length animation return instead of spinning forever (`while current_frame > length` subtracting
+  zero). Pinned by `landing_exactly_on_the_end_frame_completes_a_one_shot` and
+  `a_looping_clip_wraps_at_the_end_frame_rather_than_resting_on_it`.
+
+**The hand-back defect the one-shot fix exposed.** The register block wrote `registered_slots[slot] = Some(...)`
+even when `register_idle_animation`'s per-animator gate *refused* the request, and only a changed selection ever
+asks again. Disengaging from under an Action clip does exactly that: the sheathe layer gets registered late (the
+Action tier outranks the overlay), so by the time its window expires it is mid-pass, the idle clips are refused,
+and the finished sheathe pose goes on owning slots 0/1 — which after D1 is not cosmetic, because the
+lowest-indexed active layer that keys a bone owns it:
+
+    ANIM_STALE id=0x6 slot 0: coordinator=ota0 book=idl0/bfalse     (repeating for ~95 s, until an unrelated selection change)
+    | 0:ota0:36.00 1:ota1:36.00 2:idl2:11.00|                        (idle advancing in slot 2 only)
+
+`kuluu 2bd81daa` makes `register_animation` / `register_idle_animation(_eager)` report whether they installed
+anything; a refusal is kept as an outstanding request (`pending_idle_registrations`) and re-issued until it lands,
+and `registered_slots` records what the coordinator actually holds. Re-measured on the same stack, disengaging from
+an Action clip: `ota` pins at its last frame and hands slots 0/1 back one render step later (`| 0:idl0:… 1:idl1:…
+2:idl2:…|`), with **zero** ANIM_STALE lines for the whole session. Pinned by
+`a_declined_idle_registration_is_asked_again_until_it_lands`, which fails without the retry at
+"step 174: slot 0 still owns the transition clip otd0".
+
+**Settled on this pass.** The wire animation byte moves both ways — `ANIM_STATUS self_server_status 0x00 -> 0x01
+drawn=true` on engage, `0x01 -> 0x00 drawn=false` on disengage — so kuluu's existing draw law
+(`status == ATTACK && (target || lock)`, plus the animation-lock exception) reads it correctly and the previously
+proposed `ATTACK && animation_locked` variant stays out. That agrees with LSB, which sets the byte in
+`CBattleEntity::OnEngage` and clears it in `OnDisengage` (LSB checkout `C:/Cow_LSB/third_party/phoenix/src/map/entities/battle_entity.cpp`).
+
+**Open items on this row:**
+
+1. kuluu sizes the draw/sheathe window from clip length, while every authored Motion stage of those routines says
+   `dur=72` against 36-tick clips (`in 0`/`out0`, and `at*`/`am*` too). The unit of routine stage durations is
+   unread, so the gap the second defect lives in — window expiring before its layer's pass — stands by construction.
+   Settling read: the duration factor in the scheduler interpreter ([drivetask.md §14](drivetask.md)).
+2. Kuluu now retries a refused low-priority registration every frame. Retail has no such retry loop to cite:
+   whether `MotionQueue_ApplyPolicy` *queues* instead of rejecting (and when it then applies) is the read that would
+   replace this mechanism with retail's ([dancer_engine.md §4a](dancer_engine.md)).
+3. Side observation, protocol-side and unrelated to pose law: the map log rejects kuluu's disengage path —
+   `Invalid GP_CLI_COMMAND_ACTION packet from <char>: Character is not engaged.` Per
+   LSB's `third_party/phoenix/src/map/packets/c2s/0x01a_action.cpp`, that validator covers `AttackOff` *and*
+   `ChangeTarget`, so
+   kuluu sends one of them while the server does not consider it engaged. Its own row when action dispatch is worked on.
+4. Left deliberately: `play_cowland.bat` still exports `KULUU_SPECIAL_LOG` / `KULUU_MOTION_LOG` / `KULUU_CLIP_LOG`
+   under a "remove once the roam/engage playtest is confirmed clean" note, and `KULUU_ANIM_LOG` joins them as
+   opt-in only. Clearing that trio belongs to whoever runs the confirmation.
