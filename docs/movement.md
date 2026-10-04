@@ -1284,6 +1284,22 @@ The same slot is consulted three more times in the same function before the azim
 
 **What writes it, and why kuluu cannot see the other arm yet.** `.text` sweep of byte writes to `+0xF9` gives exactly eight sites (plus one getter): constructor `0xA8A1C` (= 1), a setter `0xA4660` (`mov al,[esp+4] / mov [ecx+0xF9],al`, i.e. an external bool), and five joint-curve writers `0x4ABAE`, `0x4BCE3`, `0x4BCF8`, `0x4F591`, `0x4F70C`. Those five are one law: index a 64-entry table (`mov eax,[ebp] / shr eax,0xd / and eax,0x3f` @**0x4BCB6..0x4BCC0**), read its float, scale by `.rdata 0x10329A20` (**= 255.0f**), round through `0x311c2c`, mask `& 0xff`, store — with the special case that a curve value ≤ 0 stores **0** (so zero is authored, not incidental). A **sibling channel at `+0xFA`** is written by the same blocks. Elsewhere the byte is consumed as an integer weight (`mov dl,[ebx+0xF9] / fild` then multiply, e.g. **0x4AE6F**), so it is genuinely 8-bit for those consumers while the camera still tests it as a boolean: any non-zero curve value keeps the actor free-running as far as the orbit law cares **[V]**.
 
+**Who runs those writers, and what block they read (pass of 2026-10-06).** All five sites live in **one function**: a whole-file byte-scan for `e8` call relativity finds exactly one caller — RVA **0x44BF2** — and zero data pointers to the target, so nothing dispatches it through a table. The callee's start is RVA **0x4A980** (`tables_functions.csv`; next recorded start 0x4E200), and its head says where the records come from (generated dump):
+
+```
+1004A986  mov      eax, dword ptr [0x1047cf7c]              ; global stream owner
+1004A994  mov      edx, dword ptr [eax + 0xa90]             ; cursor index...
+1004A9A3  mov      edi, dword ptr [eax + edx*4 + 0xa10]     ; ...this call's record block
+1004A9AC  inc      edx                                      ; one record consumed per call
+1004A9AD  mov      dword ptr [eax + 0xa90], edx             ; ...stored back at +0xA90
+1004A99B  movsx    esi, word ptr [ebx + 0x176]              ; self-relative offset...
+1004A9AB  add      esi, ebx                                 ; ...+ block base = the param table
+```
+
+so in the curve blocks (`lea eax,[esi + ecx*4]`, generated dump of RVA 0x4BBF6..0x4BC0D) `esi` is **inside that authored record block**: an array indexed by the 6-bit joint index whose entries are `{dword ptr@+0, byte flags@+4 (tested `test dl,0xf`), dword@+8}`, reached through a self-relative word at `[block+0x176]`. The function above it is RVA **0x44AE0**, called from four sites (0x368EB / 0x45A5A / 0x45AE3 / 0x45BF5), all as a member call on the same object (`mov ecx,esi / call` at 0x368E9-EB, guarded by `mov eax,[esi+0xfc] / test eax,eax / je`), and one of its own bodies walks a list through `[this+0x54]` (`lea eax,[esi+0x54] / mov edi,[esi+0x54] / mov ebx,[eax+4]` at 0x45A48..0x45A4E).
+
+**The one read C6 still needs, stated exactly:** identify the class of `esi` at 0x368E9 and find what fills its `[+0xFC]` field and the `[+0x54]` list — that loader names the DAT chunk whose bytes become these joint-curve parameter records. Without it kuluu ships retail's shipped state (free-run on, flat rate) and parses no curve channel; inventing an offset into a mo2 file for that param array is refused.
+
 Landed in kuluu as `jw-stack-815 e9c694d3`: `camera_orbit_yaw_rate_rad_per_sec` took over `FOLLOW_ACTOR_FREE_RUN_DEFAULT` (true = retail's constructor value) and normalises only when the flag is cleared; kuluu does not parse the joint-curve channel yet, so that arm stays unreachable exactly as it is in a client without authored motion. The prior test asserted tangential-speed-constancy at default radius (the wrong law for the shipped state) and was replaced rather than left passing **[local]**.
 ## 10c. The action table behind the aim axes (M31)
 
