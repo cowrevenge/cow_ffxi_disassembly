@@ -89,6 +89,7 @@ Requires: `pip install pefile capstone`.
   `sweep_text` (whole-image instruction sweep with pickle cache),
   `pol1_decode`, `KNOWN_RVAS` anchors.
 - `disasm.py`, `xref.py` — disassemble an RVA range / find xrefs to an RVA.
+- `espmap.py` — resolve `[esp+N]` operands to frame-stable slots (`f+0x…`=arg, `f-0x…`=local), applying each direct call’s `ret N`; MSVC addresses locals through a moving esp, so argument identities drift when pushes are counted by eye.
 - `p0_modmap.py` … `p11_pkt_tables.py` — per-pass scanners (module map,
   anchors, the 0x0E handler, gates, event VM, jump tables, zone scenes,
   combat tags, packet tables).

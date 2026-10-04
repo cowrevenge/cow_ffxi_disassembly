@@ -778,6 +778,104 @@ guard inside the clamp, which is where a nonsense axis actually gets bounded. Th
 nearby comparison whose meaning is independently known: the slew loop above masks C3|C0 (`and eax,0x4100`) and
 must iterate while `tick − 1.0 > 0`, i.e. "ZF set ⇔ both flags clear ⇔ greater".
 
+### E.10 — the clamp's four arguments resolved, and the frames its bones actually ship with (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)] [measured]**
+
+E.5 recorded the argument *order* but left every argument as an `[esp+N]` alias, which stops being readable
+after two pushes. This pass resolves them to frame-stable slots (now a tool: `espmap.py`, which maps each
+`[esp+N]` back to the entry frame and applies each direct call's `ret N`), then measures what those frames look
+like in shipped skeletons — because the play-test symptom (`the head turns into a tilt and the spine bows
+sideways`) is a claim about frames that nobody had measured.
+
+**The bend fetches two authored reference frames before it does anything else**, both through one accessor:
+
+```
+0x2ac69  8d 84 24 8c 00 00 00   lea eax,[esp+0x8c]      ; out operand             -> bend frame f-0x90
+0x2ac70  57                     push edi                ; register save, NOT an argument (popped at 0x2b131)
+0x2ac73  50                     push eax
+0x2ac74  6a 03                  push 3                   ; reference slot 3 = EID_NECK
+0x2ac84  e8 c7 fa ff ff         call 0x1002a750          ; ret 8 -> frame object for slot 3 at f-0x90
+0x2ac89  8d 4c 24 2c            lea ecx,[esp+0x2c]       ;                                       f-0xf4
+0x2ac8e  6a 04                  push 4                   ; reference slot 4 = EID_LOOK_AT
+0x2ac92  e8 b9 fa ff ff         call 0x1002a750          ; ret 8 -> frame object for slot 4 at f-0xf4
+```
+
+For status 5 or 0x55 the second component of that slot-4 point is shortened by one (`fld [esp+0x30]` = f-0xf0,
+`fsub [0x1032961c]`, stored back, RVA 0x2ACA8..0x2ACB2) — the sitting/resting adjustment lands on the clamp's
+second argument, not on a bone.
+
+**Pass 1 calls the clamp with those objects**: four arguments, callee-popped (`ret 0x10`).
+
+```
+0x2af06  51                     push ecx                  ; arg4 = record {xlim, ylim, scale} from 0x35270
+0x2af07  8d 44 24 74            lea eax,[esp+0x74]        ;                                     -> f-0xb0
+0x2af0b  8d 4c 24 30            lea ecx,[esp+0x30]        ;                                     -> f-0xf4 (slot-4 frame)
+0x2af10  8d 94 24 88 00 00 00   lea edx,[esp+0x88]        ;                                     -> f-0xa0
+0x2af17..19                    push ecx / push edx / mov ecx,edi (the model)
+0x2af1b  e8 20 02 00 00         call 0x1002b140           ; ret 0x10
+```
+
+f-0xb0 is the scratch filled from `model+0xB0`, the chased look point (RVA 0x2ACE0 pushes both), and f-0xa0
+comes out of the slot-3 frame through RVA 0x27120 at RVA 0x2AD40. Inside the clamp, **before any division**,
+come a basis build and a matrix-times-vector:
+
+```
+0x2b14b  e8 40 c8 ff ff         call 0x10027990           ; construct the local frame object at f-0x40
+0x2b1a7  e8 95 cf 2a 00         call 0x1002d8141          ; build/rotate that basis from arg1 (f-0xa0), with
+                                                          ;   origin seed f-0x50 = (0,0,0), hint f-0x60 = (0,1,0)
+0x2b1ac  8b b4 24 90 00 00 00   mov esi,[esp+0x90]         ; arg2 -> the slot-4 point
+0x2b1bd  e8 fe d0 ff ff         call 0x100282c0           ; this = basis, out = f-0x70, in = that point
+0x2b1c6  6a 00 00 00 40         ... push 0x40000000        ; * 2.0f on the transformed vector (E.5)
+```
+
+So the projected point is **multiplied into a basis built for this clamp call before its components are divided
+by one another at all**. Which two authored reference frames that basis comes from is [V] above; what each field
+of those frame objects holds stays **[I]** — settled by reading `0x1002a750`'s setters (RVA 0x279B0 / 0x27B80 /
+0x27BD0 / 0x27C20, fed three floats from the reference record at +2 / +6 / 0xa plus the node matrix at
+`[this+0x14] + 64*joint`) and `0x1002d8141`'s construction (point − origin, normalise by RVA 0x2D6491, cross
+with the hint).
+
+**These are the frames the bend bones actually carry**, measured through kuluu's own skeleton parser at bind pose
+with no clip applied (`cargo run -p ffxi-actor --example lookat_axes -- <install> 7072 10248 13424 16600 19776
+23176 26352`; harness `ffxi-actor/examples/lookat_axes.rs`). Pose space: model faces +X, up is −Y (§E.7). Each
+column below is that joint's composed orientation axis expressed in pose space; the two columns of a pair are
+record 0 (reference slot 3) and record 1 (slot 7), joints as named by §E.8.
+
+| skeleton (file id) | joint, slot 3 / slot 7 | bone local X | bone local Y | bone local Z |
+|---|---|---|---|---|
+| hum_ 7072 | 51 / 50 | (+0.174, −0.985, 0) / (−0.191, −0.982, 0) | (−0.985, −0.174, 0) / (−0.982, +0.191, 0) | (0, 0, −1) both |
+| huf_ 10248 | 29 / 28 | (+0.013, −1.000, 0) / (−0.164, −0.987, 0) | (−1.000, −0.013, 0) / (−0.987, +0.164, 0) | (0, 0, −1) both |
+| elv_ 13424 | 29 / 28 | (+0.203, −0.979, 0) / (−0.161, −0.987, 0) | (−0.979, −0.203, 0) / (−0.987, +0.161, 0) | (0, 0, ∓1) |
+| elv_ 16600 | 56 / 55 | (+0.177, −0.984, 0) / (−0.178, −0.984, 0) | (−0.984, −0.177, 0) / (−0.984, +0.178, 0) | (0, 0, −1) both |
+| tar. 19776 | 6 / 5 | (−0.005, −1.000, 0) / (0, −1.000, 0) | (−1.000, +0.005, 0) / (−1.000, 0, 0) | (0, 0, ∓1) |
+| mit. 23176 | 39 / 38 | (+0.013, −1.000, 0) / (−0.164, −0.987, 0) | (−1.000, −0.013, 0) / (−0.987, +0.164, 0) | (0, 0, ∓1) |
+| gal. 26352 | 39 / 38 | (+0.165, −0.986, 0) / (−0.182, −0.983, 0) | (−0.986, −0.165, 0) / (−0.983, +0.182, 0) | (0, 0, −1) both |
+
+Every shipped playable race agrees: on **both** bend bones local X runs along the spine toward the head (pose
+−Y), local Y runs horizontally behind/along the facing axis (pose ≈ −X, tipped off it by an authored 10–12° on
+hume-male/elvaan/galka necks and ~9.5–10.5° in the opposite sense on every chest bone, while hume-female,
+tarutaru and mithra necks are untipped to within a degree), and local Z is lateral (pose ∓Z). Not one of them is
+forward, and none of them is what kuluu assumes.
+
+Consequence for kuluu `apply_look_bends` (`ffxi-actor/src/look_bend.rs`, which sets forward = rot·X, up =
+rot·(−Y), right = up × forward). With the target ahead at head height the pose-space offset is ≈ (+F, ~0, ±S):
+
+* `depth = forward·off` sees **the vertical** component only — and only through that small authored tilt → near
+  zero → `scale / depth` saturates and flips sign as the target crosses the shoulder line, i.e. the behind-plane
+  branch (`BEHIND_PUSH`) fires on targets plainly in front;
+* `vertical = up·off` sees **front/back** instead of up/down, so it is always the large component, always
+  saturates the ellipse, and the clamped bearing `atan2(vertical, across)` sits near ±90° whatever the target does
+  sideways;
+* the rotation mapping forward→want is then a rotation about **the lateral axis (pose ±Z)** — a tip of the spine.
+  That is precisely the play-test report (`should look right… looks down`) and the sideways bow of the torso in
+  Shane's screenshot. `across` lands on a correct axis by luck; yaw and pitch are traded.
+
+Stated as a rule rather than a patch: kuluu must stop reading yaw/pitch off bone-local X/Y and reproduce retail's
+construction — fetch the same authored reference frames (slots 3 and 4), build the basis from them with the
+(0,1,0) hint, transform the point into that basis, apply E.2/E.5's projection/ellipse/×2 *in that frame*, then
+compose the bend onto the bone's own node orientation as §E.9 records. Swapping components inside kuluu's current
+frame would be a second guess stacked on the first: these numbers say which axis is which for a bind-pose bone
+with no clip applied, and they are not retail's basis.
+
 ## F. Leads & observations carried from summary.md §9 tail (split 2026-10-05 — history, with current status tagged)
 
 Status tags as of this split: the **limit/slew/tug hunt** below was closed by §E/§E.8 (authored
