@@ -939,9 +939,9 @@ What that fixes for masks this file leans on — with `PF` read the way `JP` rea
 
 **Numerically.** `scale` multiplies the tangent offsets while the bound stays authored, so a record's angular half-width is `atan(xlim/scale)` across and `atan(ylim/scale)` up/down: humanoids' `(0.24, 0.16)` at `scale 0.5` ⇒ ≈25.7° and ≈17.7°. §E.7's `atan(0.24)`≈13.5°/`atan(0.16)`≈9.1° figures treated scale as damping; corrected there too.
 
-**Still [I], each with the read that settles it.**
-* How retail turns the clamped vector into the per-record quaternion, roll included: only the pass-1 store path between RVA 0x2AF3D and RVA 0x2AF8B can say. kuluu applies a minimal arc from the steered axis to the clamped direction meanwhile — that fixes yaw/pitch and cannot reproduce any separate roll law.
-* Whether the two bend objects hold attach *positions* or one row of a full frame matrix: `0x2A750` returns through an out pointer that this caller uses as three floats (`fsub` writes `[esp+0x30]`, i.e. slot-4 object +4; the normalise at RVA 0x2ACCC gets the object base), while `0x2A780` visibly assembles a rotation-then-translation matrix internally. Settling read: `0x26E10` (the out initialiser) and `0x2A890` (what actually lands at the out address). kuluu's shared axis is slot-3-minus-slot-4 on this reading, with nothing built on top of that choice.
+**Both items that were open here are closed by §E.13** (same build, re-read from bytes there):
+* *How retail turns the clamped vector into the per-record quaternion, roll included* — **no roll law exists**: `0x33360` builds a minimal-arc quaternion (acos of the clamped dot product for the angle, normalised cross product for the axis, half-angle form) with the angle multiplied by the blend weight read from `model+0xBC`, then it is normalised and turned into a rotation matrix (`0x2AF5A` / `0x2AF6B`). kuluu's minimal arc plus its weight slerp is that law; §E.13 has the instruction-level record.
+* *Position or one row of a frame matrix* — a **position**: `0x26E10` initialises the out as vec4 `(0,0,0,1)` and `0x2A890` reads the authored offset from reference record **+0xE**; §E.13 records how the frame is assembled (`0x27B80/0x27BD0/0x27C20`, `0x27CF0`, `0x27D10`) and applied to the origin before it lands in the bend's operand.
 
 Reproduce (host python): constants via `struct.unpack_from('<f', d, rva)` at `0x3295d8` = 0, `0x32a22c` = 0.001, `0x32961c` = 1.0, `0x32a3c8` = 100.0; the flag probe is `fld dword [rdx] / fcomp dword [rdx+4] / fnstsw ax / mov word [rcx],ax`, executed from an allocated RWX page over the four comparison cases in the table.
 
@@ -1015,6 +1015,84 @@ So the value that reaches the release tests and the weight ramp is **world offse
 `vt+0x144` resolved by scanning `.rdata` for the vtables carrying this method: all five PC/NPC actor vtables (`0x1032d710`, `0x1032e890`, `0x1032ecb0`, `0x1032f0d0`, `0x1032f4f0`) point `+0x1BC → 0xA4740` (position), `+0x1C0 → 0xA4750` (rotation euler), `+0x1C4 → 0xD4560` (attach frame) and `+0x144 → 0x84B80`. **`0x84B80 = return [actor+0x70] ? dword [[actor+0x70]+0xE0] : 100`** — a percent whose shipped default is 100, so the alternate arm evaluates to `100 × 0.01 × 0.04 = 0.04`: numerically *the same step*. The gate `0x87060 → 0x87070` reads config globals `.data 0x10487e48`, `0x10485f7a`, settings-object bits `[+0x128] bit 15` / `[+0x12c] bit 13`, and a name check via `0x956C0`; nothing in this pass needs its truth table because both arms give 0.04 unless some producer sets the percent ≠ 100.
 
 kuluu landed as `kuluu-render/src/ffxi_actor_render.rs::look_point_actor_local` (world attach minus actor position, divided by model scale — kuluu folds root scale into pose space where retail composes it later), `Ry(−facing_dir)` applied there and the facing re-applied only at the bend call; pinned by the test `the_look_point_removes_facing_only_and_bakes_it_back`. Gap row A8's second open item (chased point vs baked `world_pose`) is closed by this record.
+
+### E.13 — what a reference-slot object actually holds, and the per-record quaternion law: no separate roll (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+§E.7/E.10 left two questions open on the same object: what `0x2A750` actually writes through its out pointer (a position, or one row of a frame matrix), and how the clamp output becomes the per-record quaternion. Both are read here; the pass-2 axes question they fed is already closed by §E.9.
+
+**The reference object is a point, built from an authored offset × rotation × the joint's node matrix.** `0x2A750(slot, out)`:
+
+```
+0002a752  8b 7c 24 10              mov edi, dword ptr [esp + 0x10]   ; out
+0002a758  57                       push edi
+0002a759  e8 b2 c6 ff ff           call 0x26e10                      ; initialiser: writes (0,0,0) and w = 1.0f — a vec4 point
+0002a75e  8b 44 24 10              mov eax, dword ptr [esp + 0x10]   ; the slot index
+0002a767  57                       push edi                          ; out
+0002a768  50                       push eax                          ; slot
+0002a769  e8 12 00 00 00           call 0x2a780                      ; fills that vec4 (below)
+```
+
+`0x2A780(out, slot)`, with `esi` = the reference record from `0x351F0(model+8, slot)`:
+
+```
+0002a7ac  8b 4e 02                 mov ecx, dword ptr [esi + 2]    ; authored float at record +0x2
+0002a7af  51                       push ecx
+0002a7b4  e8 c7 d3 ff ff           call 0x27b80                    ; scratch = scratch · Rx(that)
+0002a7b9  8b 56 06                 mov edx, dword ptr [esi + 6]    ; authored float at +0x6
+0002a7c1  e8 0a d4 ff ff           call 0x27bd0                    ; · Ry
+0002a7c6  8b 46 0a                 mov eax, dword ptr [esi + 0xa]  ; authored float at +0xA
+0002a7ce  e8 4d d4 ff ff           call 0x27c20                    ; · Rz
+0002a7db  e8 b0 00 00 00           call 0x2a890                    ; reads the record's authored position: `add eax,0xe` then copy3(out ←
+                                                                   ;   record+0xE) — so the offset sits at +0xE and the record is exactly
+                                                                   ;   0x1A = 26 bytes (s16 joint @0, three floats @2/6/A, vec3 @0xE)
+0002a7e9  e8 02 d5 ff ff           call 0x27cf0                    ; scratch translation +0x30/+0x34/+0x38 = that offset
+0002a7ee  0f bf 06                 movsx eax, word ptr [esi]       ; s16 joint id at record +0
+0002a7f1  8b 57 14                 mov edx, dword ptr [edi + 0x14]
+0002a7f8  c1 e0 06                 shl eax, 6                      ; the model's live node array,
+0002a7fb  03 c2                    add eax, edx                    ;   `[model+0x14] + 64·joint`
+0002a7fe  e8 0d d5 ff ff           call 0x27d10                    ; scratch ×= that node matrix
+0002a803  8b 4c 24 5c              mov ecx, dword ptr [esp + 0x5c] ; the out pointer
+0002a808  8d 4c 24 18              lea ecx, [esp + 0x18]
+0002a80c  e8 2f d9 ff ff           call 0x28140                    ; store: 0x26e90 copies the current vec4 to scratch, then 0x28170
+                                                                  ;   writes out = M · v with v.w = 1 (helpers verified below), so what
+                                                                  ;   lands in `out` is the FRAME APPLIED TO THE ORIGIN — a position.
+```
+
+Helper bodies read this pass to make that claim safe: `0x26E10(out)` writes three zeros and `w = 1.0f`; `0x2A890(record, out)` = `add eax,0xe` → `copy3(out ← record+0xE)`; `0x27CF0(matrix, v)` stores `v.xyz` into the matrix translation column `+0x30/+0x34/+0x38`; `0x27D10(this, other)` is a 4×4 product against `[model+0x14] + 64·joint`; and **`0x28170(out, in)` multiplies by all four columns including the translation column** (`out.x = M[0]·v.x + M[0x10]·v.y + M[0x20]·v.z + M[0x30]·v.w`, and so on for `+4/+8/+0xC`) — read together with the identity builder's writes (see §E.12), that pins a **column-major, stride-0x10 matrix whose fourth column is translation**. So: `0x2A750` hands back one vec4 = attach position; it does not hand back an axis or a row of the frame. The bend's shared vectors are differences of those positions (which is what §E.9/E.10 built on and what kuluu implements as `attach_frame(...).origin`), and the axes pass 2 composes onto come from the node matrices themselves, not from these objects. Gap row A8's first open item — position vs frame-row — is closed here.
+
+**The per-record quaternion: a minimal arc, scaled by the blend weight, with no separate roll law.** The store path after each clamp call (frame-stable operands via `espmap.py`, §E.10's tool):
+
+```
+; the four arguments pushed at RVA 0x2AF06..0x2AF18 for `call 0x2b140` land in the clamp as:
+;   arg0 ← out buffer (written by the clamp: see the stores through arg0 at RVA 0x2B2D0/0x2B2DA/0x2B2E0/0x2B2EB, and
+;          `fstp [esi]` / `fstp [esi+4]` on the rim rebuild at RVA 0x2B2FF / 0x2B30C)
+;   arg1 ← vector handed to the look-at basis builder (loaded at RVA 0x2B150, fed to 0x2d8141 at RVA 0x2B1A7)
+;   arg2 ← vector projected into that basis and bounded by the ellipse (loaded at RVA 0x2B1AC → `call 0x282c0`)
+;   arg3 ← the record {xlim, ylim, scale} from 0x35270
+0002af34  e8 27 84 00 00   call 0x33360      ; this = the record's own quaternion slot (the pass-1 scratch cursor `ebx`, stride 0x10)
+                                            ; args: reference direction · clamped output · a scalar read from
+                                            ;   `[esp+0x28]` → f-0xf8, which RVA 0x2ADF1 fills from **model+0xBC** — the blend weight §B/§E.9 ramped
+0002af3d..0x2af56          mov [esp+0x3c..0x48]   ; copy the quaternion into a local (x,y,z,w)
+0002af5a  e8 b1 7e 00 00   call 0x32e10      ; normalise it
+0002af6b  e8 70 80 00 00   call 0x32fe0      ; quaternion → 4×4 rotation matrix (out pushed as its argument)
+0002af7c  e8 0f d3 ff ff   call 0x28290      ; rotate a vector by that matrix
+0002af85  e8 e6 7a 00 00   call 0x32a70      ; Euler-angle helper (three component pushes; not part of the arc)
+```
+
+`0x33360(out_quat, dirA, dirB, scale)` body — this is the whole law:
+
+```
+dot = 0x27530(dirB, dirA)                            ; helpers: 0x27530 = dot(a,b), verified by its bytes at RVA 0x27530
+clamp dot to [−1.0, +1.0] (±1.0 written from .rdata 0x32961c / 0x32a3f0)
+angle = acos(dot) × scale                            ; `call 0x3137e0` then `fmul [esp+0x24]` (the scalar above)
+axis  = normalise(0x27550(dirA, dirB))               ; cross product helper at RVA 0x27550
+angle ×= .rdata 0x329a08 (= 0.5)                     ; half-angle form
+out.xyz = axis · sin(half)      out.w = cos(half)    ; `fsin`/`fcos`, stores to [esi..esi+0xC]
+```
+
+So there is no roll term and nothing else: retail builds the **minimal-arc quaternion from the shared reference direction to that record's clamped output, with its angle multiplied by the blend weight before halving** — numerically `slerp(identity, full_arc, weight)`, which is exactly what kuluu already applies (`Quat::IDENTITY.slerp(rot, weight)` in `ffxi-actor/src/look_bend.rs::rotate_about_pivot`) on top of `Quat::from_rotation_arc(reference, clamped)`. Item 3's question — whether retail turns the clamped vector into a quaternion with an additional roll law kuluu is missing — answers **no**; §E.11's and A4/A8's open item on that point closes here.
+
+**Still [I], one thing only, with its settling read.** Which of the two shared vectors fed to the clamp is which — §E.10 records `at` = the chased look point measured from the anchor origin and `point` = the normalised difference of the two reference positions, and kuluu implements exactly that. Re-deriving the push/arg pairing for `call 0x2b140` by hand off the raw listing did not reproduce §E.10's assignment in this pass, so the pairing stays **[I] both ways**: nothing moves in kuluu on an unpinned slot map, and neither assignment gets re-claimed as verified here. Settling read (one mechanical pass, no hand counting): extend `espmap.py` to follow branches *into* the clamp's two return paths (RVA 0x2B33C and RVA 0x2B371) with each callee's real `ret imm`, then print the arg-slot provenance of the pointer written at RVA 0x2B2BF (`mov esi,[esp+0x88]`) and of the two pointers pushed for `0x33360` at RVA 0x2AF31/0x2AF30 — that names which caller buffer each is, in one run, without any hand counting.
 
 ---
 
