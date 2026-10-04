@@ -389,6 +389,106 @@ virtual arrow-key actions**, which the M15/M19/M20 keyboard integration then
 consumes — one more reason kuluu should not model mouse and arrows as separate
 scales (gaps C3, C2).
 
+### §10a-ii — M36: the mouse state machine behind drag aiming **[V]** (pass of 2026-10-06 against `FFXiMain.unpacked.dll`, TDS 0x6A995428)
+
+**M36 [V].** Names what kuluu's "drag button held" gate stands for. Everything below is a byte read in
+this build; RVAs are `.text` unless marked, and `obj` is the single mouse-state object.
+
+**The object.** Allocated once: `push 0xb0 / call 0x311BBB` (operator new) at **0x1651B4**, constructed by
+`mov ecx, eax / call 0x124440` (**0x1651C7**), stored into `.data 0x104E1D4C` (**0x1651CC**). Its ctor
+(`0x124440`) zeroes the state byte (`ebx` zeroed at **0x124445**, `88 5e 4d` = `mov byte [esi+0x4d], bl` at
+**0x124462**), sets the mouse-enable byte to 1 (`c6 86 88 00 00 00 01` at **0x124465**) and stores
+`.rdata`-independent `-1,000,000.0f` (`c479c000`) into `[obj+0x70]` (**0x12445B**). So `byte[[0x104E1D4C]+0x4d]`
+is *runtime mouse state*, not a configuration value: it starts at 0 and only the chains below move it.
+
+**Fields, as used by this cluster (size 0xB0).** `+0x04/+0x08` = current cursor x/y (the mode-5 chain reads
+them against the press anchor, e.g. **0x125233**/**0x125240**); `+0x0C/+0x10` = the same pair copied each
+frame (**0x12548B**/**0x12548E**); per-button press anchors at `[obj + slot*8 + 0x1C]` x and `+0x20` y, held
+byte per button at `[obj + slot + 0x34]`, with slots 0/1/2 as the chains pick them up below; drag aim
+anchors at `+0x38/+0x3C`; state byte `+0x4D`; two flag bytes `+0x54`/`+0x55`; countdown slot `[obj+0x74]` for
+the left chain and `[obj+0x78]` for the right; mouse-enable `+0x88`.
+
+**Two chains, one per drag button, run every frame in a fixed order.** The handler **0x1253A6** calls the
+right-button chain first (`e8 c5 fd ff ff` = `call 0x125170` at **0x1253A6**) and the left-button chain last
+(`call 0x125040` at **0x1253AD**), so when both would engage on one frame the byte ends up reading 4. The
+same handler also forces mode 0 from outside: `mov byte [esi+0x4d], 0` at **0x12537A** behind a true return of
+`call 0x1606f0` (object `0x10621838`) and at **0x125396** when `[0x10666e7c] != 0`.
+
+*Right chain (`0x125170`).* Reads the byte: ≤0 → arm the countdown (below) and return; ∈{1,2} → evaluate
+entry; >2 and ≠5 → re-arm and return; ==5 with mouse-enable set → stay in 5, otherwise fall back to mode 1
+(`mov byte [esi+0x4d], 1` at **0x12519B**). Button query: `GetAnalogKey(0x3E, action 0x8C, 4, -1)`
+(**0x1251A6..0x1251BE**, slot index forced to 1 by `mov edi, 1` at **0x1251B1**); if the `CFsConf6Win` flag
+(`call 0x125e050`) is set *and* that query returned 0, it re-queries with action **0x8B** (**0x1251CD..0x1251E0**).
+Entry then requires, in order: the queried byte `== 1` exactly (`cmp bl, 1 / jne` at **0x125222**), the held
+byte `[obj+slot+0x34]` non-zero (**0x12522B**), and — the interesting part — *either* arm of displacement or
+hold-time (next paragraph), then `+[0x54] == 0 && +[0x55] == 0` (**0x125266**/**0x12526D**), then `call
+0x239490 != 0` **or** game state `[[0x10456a28]] ∈ {0x60, 0xd0}` (**0x125274..0x12528F**), then mouse-enable
+(**0x125291**) → `mov byte [esi+0x4d], 5` at **0x12529B**.
+
+*Left chain (`0x125040`).* Same shape, own countdown slot `[obj+0x74]`: modes {1,2} evaluate; mode ==4 with
+mouse-enable stays, without it drops to 1 (**0x12505F**). Default action **0x8B** with slot 0 (`mov edi, 0x8b`
+/ `xor ebx, ebx` at **0x125071**); under the `CFsConf6Win` flag it becomes action **0x96** with slot 2
+(**0x125081**/**0x125086**) — so `{0x8B, 0x96}` are *the same drag button in two control profiles*, not two
+buttons. Its state gate is stricter: `[[0x10456a28]] == 0x60` only (**0x125140..0x125149**), no `0x239490`
+alternative → store 4 at **0x12515D**.
+
+**Engagement arm 1 — displacement from the press anchor.** Integer squared distance cursor-minus-press:
+`imul edx,ecx / imul ecx,eax / add edx,ecx` then `cmp edx, 0x40 / jg entry-checks`. Left chain **0x125105..0x125114**
+(`cmp edx,0x40` at **0x125111**), right chain **0x125247..0x125254** (at **0x125251**). Eight pixels is the
+gate — and it is measured *from the stored press position*, not as accumulated per-frame motion: wander
+inside the gate for a minute and nothing engages, walk 9 px in one frame and it does.
+
+**Engagement arm 2 — hold the button still until a countdown expires.** Each chain owns a float slot armed
+to `0x41c80000` = 25.0: `[obj+0x78]` at **0x1252A6**, `[obj+0x74]` at **0x1250CD** and **0x125063**. While the
+button byte is non-zero the whole-tick clock (M29 getter `0x14CF0`, rounded by `call 0x311C2C`) is subtracted
+from it — right chain **0x1251FE..0x125216** (`db 44 24 0c fild` / `d8 6e 78 fsubr [esi+0x78]` / `d9 5e 78
+fstp`), left chain **0x1250B0..0x1250C8**; the arm branch runs when that clock is no longer positive, using
+the *non-parity* form of the flag test (`fnstsw ax / and eax,0x4100 / jne` at **0x1251F3..0x1251F8**,
+identically **0x125096..0x12509B**), which under the joint.md §J10 table means "not strictly above", i.e. ≤ 0
+or unordered → re-arm to 25.0 and stop counting. The entry gate then tests the same clock the *parity* way:
+`fld [obj+0x78] / fcomp dword [0x103295d8] / fnstsw ax / test ah, 0x41 / jp exit-no-entry`, right chain
+**0x125256..0x125264**, left chain **0x125116..0x125124**. `.rdata`-adjacent constant `0x103295d8` reads back
+as **+0.0** (`00 00 00 00`, dumped), and per J10 mask `0x41` means *jp = above-or-unordered*, so falling
+through — admitting entry — requires the clock ≤ 0. Both forms agree: a countdown from 25.0 in M29 tick units,
+i.e. ~13 frames at the default cap (≈0.42 s), after which standing still on a press engages the drag.
+
+**The two flag bytes gate entry, and are not configuration.** `+[0x54] = 1` is written at **0x1254DC** inside
+the per-frame handler behind *five* conditions: action `0x8B` with mode filter arg 1 reads exactly 1
+(**0x125497..0x1254AC**), `call 0x126290(this)` true, `[esp+0x10] != 0`, `call 0x118c10(&[obj+4])` true, and
+`call 0x15dce0(0x10621838)` **false**. Both flags clear together when action `0x8B` with mode filter arg 4
+reads 0 (**0x1254E0..0x1254FA**: `mov byte [esi+0x55], al / mov byte [esi+0x54], al`). Separately, the
+absolute-cursor normaliser **0x157720** (M31's writer of `[obj+0x8C]/[obj+0x90]`) sets `byte [obj+0x55] = 1`
+unconditionally as it stores (**0x157751**), and clears happen in **0x15783E**'s neighbourhood
+(**0x157940**, **0x1579DA**, **0x157AE4**). So a drag cannot be entered while an absolute-cursor aim sample is
+installed — which is consistent with M31's two-shape finding but not a name for the flags; see open items.
+
+**Mode census in this build.** Stores of `+0x4D` (byte-size writes, from a whole-`.text` sweep) land only in
+this cluster: 0 → **0x12537A**, **0x125396**; 1 → **0x12505F**, **0x12519B**, **0x1252D7**; 2 → **0x1252D1**;
+3 → **0x125594**; 4 → **0x12515D**; 5 → **0x12529B**; 6 → **0x125626**. Readers compare against the mode: `==5`
+at **0x12330C**, **0x12347C**, **0x1249C1**, **0x124A90**, **0x158670**; `==4` at **0x158690** (and that pair is
+itself gated by the `CFsConf6Win` flag the opposite way round: mode 5 is consulted when it is *set*, mode 4
+when clear, **0x158662..0x1586A0**); `==6` at **0x125001**; `==3` at **0x125E1A**; `==2` at **0x125D11**,
+**0x1262E0**, **0x14A9B2**, **0x15DDC1**, **0x15DE77**, **0x15DEFC**, **0x1E4634**, **0x1F6A46**. The handler's own
+dispatch is a jump table `.data 0x10125f2c` indexed by mode, guarded `cmp eax, 6 / ja default` at
+**0x125502..0x12550B**.
+
+**Aim shape while engaged (ties back to M31).** Mode 4/5 take the anchor-relative accessor pair — cursor minus
+the drag anchor (`[obj+8] - [obj+0x3C]`, `[obj+4] - [obj+0x38]`) divided by extent × `.rdata 0x32a39c` (= 0.2,
+dumped) and clamped ±1: **0x126190..0x1261F1** (upper clamp via `fcom [0x1032961c]` + `and eax,0x4100 / jne`,
+lower via `test ah, 5` with J10's "jp = not-below") and its twin **0x126200**. `.rdata 0x32df9c` dumps as
+`3d430c31` = **0.0476185 ≈ 1/21**, the left chain's denominator M31 recorded.
+
+**Consequence for kuluu.** Row C3 is now a *law*, not a shape: aiming requires an engaged drag; engagement is
+displacement-from-press > 8 px **or** ~0.42 s of hold; while engaged the axis is anchor-relative at 1/5 (right)
+or 1/21 (left) of the extent; left has precedence on a tie. Ported as `jw-stack-815 b4d62400`
+(`mouse_drag_aim_axis`, `DRAG_ENGAGE_PX_SQ = 64`, `DRAG_ENGAGE_HOLD_SECS = 25/60`, per-button `DragTrack`).
+Still [I], with the reads that would settle them: (a) physical identity of action ids `0x8B` / `0x8C` / `0x96`
+— their *roles* are recorded above, and the settling read is the device-0x3E row of the input-action table in
+`.data` (or `decomp/GetAnalogKey_123970.c`, which this checkout does not carry); (b) what `+[0x54]` / `+[0x55]`
+mean beyond their verified writers/clearers — settling read: the callers of `0x118c10`, `0x126290` and
+`0x15dce0`; (c) what modes 1/2/3/6 do downstream (mode 5's consumers are M31's accessors, mode 4's are the 1/21
+pair; settling read: the `0x10125f2c` table bodies).
+
 ## 10b. The two aim axes and their laws (M30)
 
 **M30 [V].** Closes "the unit of `[cam+0x48]`" (§16) and re-draws the aim path end to end
@@ -1351,7 +1451,8 @@ is in [target_track.md](target_track.md) §6.
 | M32 | [V] | The spring reference is walker-owned and camera-read: one setter `0x1E2F0` writes `[0x10456DB0]` mode + `[0x10456DB4]` angle (stores at 0x1E314/0x1E319); its only seven callers are the reset `0x1E685` and six walker steer-branch sites (`0xA6998 A69AA A6A1A A6A46 A6A5D A6C29`); the camera reads it once (`fld/fchs` at `0x1F18E`, gate `[0x10456DB0]`, scaled `6.0/max(dist, .rdata 0x329A18)` into applier `0x1EBB0`) behind predicates `0x25E050` (`[[0x1066276C]+0x44]==2`) and `vt+0x330`. **No camera-side lock-on orbit exists** — while locked the reference is the walker’s own per-frame turn | §10d |
 ## 15. Kuluu conclusions (for the walker rework)
 | M34 | [V] | Zoom has ONE rate and TWO durations, all re-read this pass. Same expression in four arms: `tick x 6.0`, `.rdata` RVA 0x32A3E8 (`40c00000`). Key arm in: device 0x3F action 0x4F via getter 0x123A70 @0x1F81A, `call 0x152C0` focal / `call 0x14CF0` tick / `fmul [0x1032a3e8]` (0x1F834) / `fadd` (0x1F83A), clamp compare vs 900.0 @0x1F842 -> imm store 0x44610000 @0x1F855; key arm out: action 0x50 tested @0x1F86A, `fsubr` @0x1F88A, clamp vs 242.0 -> imm 0x43720000 @0x1F89F — continuous every frame held, no edge or notch conversion; BOTH key arms then reach the accumulator clear `call 0x1025e230` (0x1F8A7 and via join 0x1F945) before setter 0x15290. Wheel arms gated by `call 0x1025e050` = `[[0x1066276C]+0x44]==2`; +acc arm focal step @0x1F8D5..0x1F8E0 with clear only on its clamp store (@0x1F8FF), -acc arm @0x1F91D..0x1F928 (clamp 242 -> clear via 0x1F93D->0x1F945); `jle`@0x1F8CA / `jge`@0x1F912 make the arms exclusive, so exactly one step per frame regardless of magnitude — notches buy frames (acc += 2/notch). Drain 0x25E240 (`jmp` thunk 0x25E0E0) has exactly ONE call site in the binary: `call 0x1025e0e0` @RVA 0x1295A inside frame function 0x121BD, unconditional. Both-keys ease bracket `-1 < ease < 1` around `(350-focal) x 0.25`; flag convention fixed by two unambiguous sites (tick getter 0x14CF0 = max(tick,1); tick-writer divisor clamp 0x12C57). Kuluu `jw-stack-815 02766871`: one law fn + WheelZoom counter; deleted FOCAL_RATE_PER_SEC-as-per-second (25× slow) and the inverted key sign (§11d) |
-| M35 | [V] | The distance normalisation of M30's azimuth law is gated by one actor byte: `vt+0x330` IsFreeRun = 0xA4670 (`mov al,[ecx+0xF9]`), tested as a boolean at the orbit site (0x1F036/0x1F03C/0x1F03E `jne 0x1f0a2`) so the `6/max(dist,0.01)` scaling runs only when it is zero; ctor writes 1 (0xA8A1C) -> shipped state is free-run = radius-independent rate; writers are five joint-curve stores of `round(curve x .rdata 0x329A20=255.0) & 0xff` (0x4ABAE/0x4BCE3/0x4BCF8/0x4F591/0x4F70C, curve<=0 stores 0) plus a bool setter 0xA4660; sibling channel at +0xFA; other consumers treat it as an 8-bit weight (fild at 0x4AE6F). kuluu `e9c694d3` | §10b-ii, gaps C6 |
+| M35 | [V] | The distance normalisation of M30's azimuth law is gated by one actor byte: `vt+0x330` IsFreeRun = 0xA4670 (`mov al,[ecx+0xF9]`), tested as a boolean at the orbit site (0x1F036/0x1F03C/0x1F03E `jne 0x1f0a2`) so the `6/max(dist,0.01)` scaling runs only when it is zero; ctor writes 1 (0xA8A1C) -> shipped state is free-run = radius-independent rate; writers are five joint-curve stores of `round(curve x .rdata 0x329A20=255.0) & 0xff` (0x4ABAE/0x4BCE3/0x4BCF8/0x4F591/0x4F70C, curve<=0 stores 0) plus a bool setter 0xA4660; sibling channel at +0xFA; other consumers treat it as an 8-bit weight (fild at 0x4AE6F). kuluu `e9c694d3` | §10b-ii, gaps C6 |
+| M36 | [V] | Mouse state machine: global .data 0x104E1D4C is one object (new(0xB0) @0x1651B4, ctor 0x124440 writes mode byte +0x4D = 0 and mouse-enable +0x88 = 1); right/left drag chains engage mode 5 / mode 4 on squared displacement > 0x40 from the press anchor OR a 25-tick countdown; handler order right-then-left so left wins ties; +0x54/+0x55 must read clear | this doc §10a-ii |
 
 - Kill auto-recenter-follow: the camera is free; it re-anchors only on input (M11).
 - Movement is camera-anchored polar: rotate the raw input by the camera azimuth,
@@ -1381,7 +1482,11 @@ is in [target_track.md](target_track.md) §6.
 ## 16. Open items
 
 - ~~0x123970 (GetAnalogKey) full decode~~ — **closed by M31 (§10c)**: arg-2 is the action id, the gate word `.data 0x1036CF60[action*2]` is a device bitmask and there is no device argument. Actions 8b/9a/b/c, 0x79..0x7C, 0x4F/0x50 and 0x16..0x19 are now in the census table; the remaining un-censused ids are unread (they gate nothing in movement.md).
-- Which input mode `byte[[0x104E1D4C]+0x4d]` a default-configured client carries, and what `CFsConf6Win` (0x25E050)/fn 0x25E040 mean beyond gating the mode-4/mode-5 split. Settling reads: the writer of that byte (config load path) and one bounded read of both bodies. Matters only for which *source* a player sees (M31).
+- ~~Which input mode `byte[[0x104E1D4C]+0x4d]` a default-configured client carries~~ — **closed for
+  the byte itself** by M36 (§10a-ii): it is runtime mouse state, ctor-initialised to 0 at RVA 0x124462,
+  moved only by the two drag chains and the force-mode-0 paths at RVA 0x12537A / 0x125396. Still open:
+  what `CFsConf6Win` (0x25E050) means beyond selecting the mode-4/mode-5 profiles, and fn 0x25E040
+  (both M31).
 - Who sets `byte[[0x104DFD98]+0x4194]` — the flag that makes actions 4/5 return 0.0 unconditionally (M31). Settling read: writes of `+0x4194` on that object.
 - ~~M30 law 1: which arm carries the distance normalisation, and whose slot is the predicate~~ — **both closed**: `jne 0x1f0a2` (bytes `75 62`) jumps over the scaling block, so it runs **only when IsFreeRun is false** (parallel/strafe) and retail holds a flat 1.675 rad/s while free-running; §11 M18 independently records the same polarity for the spring consumer. The slot belongs to arg-1 of 0x1EE60 (the followed actor), not the camera manager. kuluu always normalised (`jw-stack-815 d232f504`). **Closed 2026-10-06 by M35 (§10b-ii)**: the slot body is `mov al, byte ptr [ecx + 0xf9]` (0xA4670), the constructor initialises that byte to 1, and it is authored motion's curve channel that clears it — so kuluu's shipped default must be the *flat* rate; corrected for real in `kuluu jw-stack-815 e9c694d3`, with gaps row C2 (below) recording what stays unread.
 - The per-frame tick caller of 0xA65CB (vtable-dispatched; not yet pinned).
