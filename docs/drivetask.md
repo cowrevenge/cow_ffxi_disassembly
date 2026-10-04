@@ -1805,4 +1805,61 @@ matches the operand shape read here (vec4 at `+0x7B4`, slot id at `+0x7A4`, dura
 3. **The three angle components are all live** in the world matrix (§16.1), so a routine authoring pitch or roll does
    tilt an actor in retail. kuluu carries the triple but renders yaw only; whether any shipped routine authors non-zero
    outer angles is an open data question, and it decides whether that becomes a bug (settling read: census
-   `ActorRotation` stage payloads over the real DAT set).
+   `ActorRotation` stage payloads over the real DAT set). **Answered 2026-10-06 (§17): no.** Across the whole base
+   install view every one of the five authored records has both outer components exactly zero, so yaw-only rendering is
+   not a bug on shipped data — it stays a modelling gap only.
+
+## 17. Stage-byte census over the installed routines **[measured]**
+
+Run through kuluu's own scheduler parser rather than a side-written reader: `cargo run -p ffxi-dat --example
+dat-stage-census -- <install-root>` (kuluu `jw-stack-815 d1b2948d`). It walks the base install view (`DatRoot::root()`, so no
+overlay pack can change which records exist), parses every DAT under 8 MiB as a resource directory, and counts stages by
+their raw opcode byte together with the kind kuluu classified them as.
+
+```
+files=52989 (oversize 213 unreadable 0) routines=288836 rejected=0 stages=1591732
+distinct stage bytes seen: 158
+```
+
+Zero rejected routine parses, which is the number that matters for every census in this file: kuluu's parser sees the
+whole authored corpus. A python walker written alongside §9 earlier reported *no* records at all for `0x2F`, `0x62`,
+`0x7A` and `0xA9`; it was mis-parsing, and its counts should not be quoted again.
+
+| stage byte | kuluu kind | records |
+|---|---|---|
+| `0x01` | StartRoutine marker (one per routine) | 288,835 |
+| `0x00` | unclassified prologue word | 288,834 |
+| `0x02` | Particle | 198,606 |
+| `0x03` | SubRoutine | 143,538 |
+| `0x0A` | SoundOnCaster | 102,061 |
+| `0x05` | Motion (the clip request) | 71,521 |
+| `0x2F` | **HoldRotation** (§15.2) | 12,294 |
+| `0x28` | TransitionToIdle (§14.1) | 7,023 |
+| `0x89` | LockLookAt | 504 |
+| `0x5E` / `0xBF` | Knockback (§16.2's producer of the airborne byte) | 410 / 49 |
+| `0x7A` | unclassified — §16.3 read it as jump-at-actor | 228 |
+| `0x62` | TurnToward (§15.5) | 214 |
+| `0xA9` | **ActorRotation** | 5 |
+| `0xAA` | ActorRotation's sibling byte | **0 — never appears in this install** |
+
+Two corrections the rows need.
+
+1. §9.5b counts stage `0x28` at 6,234 records; this walk measures **7,023** over the base view of this install with
+   kuluu's parser (rejected parses = 0). Both numbers are kept visible rather than merged — the difference is walk
+   scope, not a parse difference, and every downstream claim on that row (`float ∈ {30,24,20,10,60,36,15}`) is about
+   the payload, which this pass did not re-read.
+2. Stage `0xAA` builds the same task as `0xA9` (§12/§13 read both cells), but **no routine in this install uses it**. So
+   the shipped population of ActorRotation is five records, all of them these:
+
+```
+C:\PhoenixXI\SquareEnix\FINAL FANTASY XI\ROM3\0\43.DAT : seq5 frame 1040 : angles=[0.0, 90.0, 0.0]   mode=0 duration=960
+C:\PhoenixXI\SquareEnix\FINAL FANTASY XI\ROM3\0\43.DAT : seq0 frame 1040 : angles=[0.0, -90.0, 0.0]  mode=0 duration=960
+C:\PhoenixXI\SquareEnix\FINAL FANTASY XI\ROM3\0\43.DAT : seq2 frame 840  : angles=[0.0, -135.0, 0.0] mode=0 duration=960
+C:\PhoenixXI\SquareEnix\FINAL FANTASY XI\ROM3\0\43.DAT : seq4 frame 840  : angles=[0.0, -135.0, 0.0] mode=0 duration=960
+C:\PhoenixXI\SquareEnix\FINAL FANTASY XI\ROM3\0\43.DAT : seq6 frame 1440 : angles=[0.0, 45.0, 0.0]   mode=0 duration=960
+```
+
+max |angle| per component = `[0.0, 135.0, 0.0]`, modes seen `{0}` — §13's "every shipped record zeroes components 0/2"
+is confirmed against the whole install instead of the samples it was drawn from, and every one is mode 0 (the countdown
+branch never runs on shipped data either). All five are `seq`-prefixed routines in `ROM3/0/43.DAT`, which also means
+the drive-task law (§12/§13) has no coverage outside scripted sequences.
