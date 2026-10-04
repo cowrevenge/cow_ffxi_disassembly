@@ -947,6 +947,75 @@ Reproduce (host python): constants via `struct.unpack_from('<f', d, rva)` at `0x
 
 Landed in kuluu as `ffxi-actor/src/look_bend.rs::clamp_bend_axis` with tests `a_point_inside_the_ellipse_is_handed_back_unchanged`, `a_saturated_bend_stops_at_the_records_own_angle`, `a_point_behind_the_plane_saturates_without_diverging`, `only_a_record_with_both_axes_zero_is_inert`.
 
+### E.12 — what space the chased look point lives in: actor-local, yaw removed, nothing else (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)]**
+
+§B recorded where the walker *fetches* the look point (`[vt+0x1C4](3)` at RVA 0xD5C64, the `+0xB2` visibility drop of `1.2f`, stores to actor+0x848/0x84C/0x850). This pass reads what happens between that store and the weight ramp — which axis are removed from it — because kuluu's bend needs the look point in the same space as the node matrices §E.9 passes it (`[this+0x14] + 64·joint`), and a mismatch there is exactly "a target to the side bends pitch".
+
+The fetch (frame-stable operands; `edi` = target, `esi` = actor, `ebx` = `[actor+0x674]`'s first element = the dancer model):
+
+```
+000d5c64  6a 03                    push 3                        ; reference slot → attach point 3
+000d5c66  8b cf                    mov ecx, edi                  ; this = the target
+000d5c68  ff 90 c4 01 00 00        call dword ptr [eax + 0x1c4]  ; target's attach 3, WORLD space (vt+0x1C4 → 0xD4560)
+000d5c72  c7 44 24 1c 00 00 00 00  mov dword ptr [esp + 0x1c], 0 ; the vec4's w
+000d5c7a  66 83 bf b2 00 00 00 00  cmp word ptr [edi + 0xb2], 0  ; visibility WORD (row A1)
+000d5c84  d8 25 04 a4 32 10        fsub dword ptr [0x1032a404]   ; .rdata 1.2f — read this pass: 1.2000000476837158
+000d5c92  d9 9e 4c 08 00 00        fstp dword ptr [esi + 0x84c]  ; y (after the drop)
+000d5c98  89 96 48 08 00 00        mov dword ptr [esi + 0x848], edx
+000d5c9e  89 86 50 08 00 00        mov dword ptr [esi + 0x850], eax
+```
+
+Then the tail re-reads those three floats and converts them before anything consumes them (RVA 0xD5CAE loads +0x848/0x84C/0x850 to `[esp+0x10..0x1c]`):
+
+```
+000d5cda  ff 92 bc 01 00 00        call dword ptr [edx + 0x1bc]  ; → pointer: RVA 0xA4740 = 8d 81 fc 05 00 00 c3 (lea eax,[ecx+0x5fc])
+000d5ce0  50                       push eax
+000d5ce1  8d 44 24 14              lea eax, [esp + 0x14]
+000d5ce6  e8 b5 13 f5 ff           call 0x270a0                  ; look −= actor_position (in-place vec3 subtract)
+000d5cee  8d 4c 24 30              lea ecx, [esp + 0x30]
+000d5cf2  e8 99 1c f5 ff           call 0x27990                  ; this-returning stub (mov eax,ecx; ret — no field writes in this build)
+000d5cfb  e8 b0 1c f5 ff           call 0x279b0                  ; identity: zeroes every off-diagonal AND the translation column
+                                                                 ; +0x30/0x34/0x38, sets [0]/[+0x14]/[+0x28]/[+0x3c] = 1.0f (b8 00 00 80 3f @0x279d6)
+000d5d00  8b 16                    mov edx, dword ptr [esi]
+000d5d02  8b ce                    mov ecx, esi
+000d5d04  ff 92 c0 01 00 00        call dword ptr [edx + 0x1c0]  ; → pointer: RVA 0xA4750 = 8d 81 1c 06 00 00 c3 (lea eax,[ecx+0x61c]);
+                                                                 ; .y is actor+0x620 = yaw
+000d5d0a  d9 40 04                 fld dword ptr [eax + 4]
+000d5d0e  8d 4c 24 34              lea ecx, [esp + 0x34]         ; the scratch matrix
+000d5d12  d9 e0                    fchs                          ; negate — yaw is REMOVED, not applied
+000d5d14  d9 1c 24                 fstp dword ptr [esp]
+000d5d17  e8 b4 1e f5 ff           call 0x27bd0                  ; matrix = matrix × Ry(−yaw) (builds Ry on its own scratch, multiplies via 0x27d10)
+000d5d1c  8d 44 24 10              lea eax, [esp + 0x10]         ; the look offset
+000d5d20  8d 4c 24 30              lea ecx, [esp + 0x30]         ; this = matrix
+000d5d25  e8 d6 24 f5 ff           call 0x28200                  ; point = M · point; helper 0x28230 is affine (adds [M+0x30/0x34/0x38]),
+                                                                 ; and the identity builder left that translation zero, so here it is rotation-only
+```
+
+So the value that reaches the release tests and the weight ramp is **world offset minus actor position, with yaw rotated out about Y — and nothing else**: pitch/roll/slope are not part of it (the actor matrix carries no pitch anyway; §E.9's node array is in this same facing-free space). Confirmed constants read this pass: `.rdata 0x32a404` = 1.2, `0x32a85c` = **0.04** (the weight step *and* the alternate arm's second factor), `0x329a18` = 0.01.
+
+**The weight step and its alternate arm.** Same tail:
+
+```
+000d5d33  c7 44 24 0c 0a d7 23 3d  mov dword ptr [esp + 0xc], 0x3d23d70a   ; default step = f32 0.04
+000d5d3b  e8 20 13 fb ff           call 0x87060                            ; gate
+000d5d40  84 c0                    test al, al
+000d5d42  74 30                    je 0xd5d74                              ; false → keep the 0.04
+000d5d44  8b 16                    mov edx, dword ptr [esi]
+000d5d48  ff 92 44 01 00 00        call dword ptr [edx + 0x144]            ; percent
+000d5d4e  85 c0                    test eax, eax
+000d5d50  74 22                    je 0xd5d74                              ; zero percent → keep the 0.04
+000d5d52  8b 06                    mov eax, dword ptr [esi]
+000d5d56  ff 90 44 01 00 00        call dword ptr [eax + 0x144]            ; …re-read and used
+000d5d5c  89 44 24 0c              mov dword ptr [esp + 0xc], eax
+000d5d60  db 44 24 0c              fild dword ptr [esp + 0xc]
+000d5d64  d8 0d 18 9a 32 10        fmul dword ptr [0x10329a18]             ; × 0.01
+000d5d6a  d8 0d 5c a8 32 10        fmul dword ptr [0x1032a85c]             ; × 0.04
+```
+
+`vt+0x144` resolved by scanning `.rdata` for the vtables carrying this method: all five PC/NPC actor vtables (`0x1032d710`, `0x1032e890`, `0x1032ecb0`, `0x1032f0d0`, `0x1032f4f0`) point `+0x1BC → 0xA4740` (position), `+0x1C0 → 0xA4750` (rotation euler), `+0x1C4 → 0xD4560` (attach frame) and `+0x144 → 0x84B80`. **`0x84B80 = return [actor+0x70] ? dword [[actor+0x70]+0xE0] : 100`** — a percent whose shipped default is 100, so the alternate arm evaluates to `100 × 0.01 × 0.04 = 0.04`: numerically *the same step*. The gate `0x87060 → 0x87070` reads config globals `.data 0x10487e48`, `0x10485f7a`, settings-object bits `[+0x128] bit 15` / `[+0x12c] bit 13`, and a name check via `0x956C0`; nothing in this pass needs its truth table because both arms give 0.04 unless some producer sets the percent ≠ 100.
+
+kuluu landed as `kuluu-render/src/ffxi_actor_render.rs::look_point_actor_local` (world attach minus actor position, divided by model scale — kuluu folds root scale into pose space where retail composes it later), `Ry(−facing_dir)` applied there and the facing re-applied only at the bend call; pinned by the test `the_look_point_removes_facing_only_and_bakes_it_back`. Gap row A8's second open item (chased point vs baked `world_pose`) is closed by this record.
+
 ---
 
 ## F. Leads & observations carried from summary.md §9 tail (split 2026-10-05 — history, with current status tagged)
