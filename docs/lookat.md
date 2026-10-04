@@ -347,6 +347,28 @@ The setter sits in a block of the record-side method **`0x87E40`** — entered a
 Read together: **mask 0x1 means "the aim currently installed came from a record-side request, so the walker must not overwrite it by re-acquiring the target".** kuluu has no record-side aim installer, which is why nothing in kuluu corresponds to mask 0x1 today and why adding one would be invented state. What remains unread, with its settling read named: (i) which of `0x87E40`'s paths store the mode argument consumed at `[esp+0x2c]` (`mov [esp+0x2c], ecx` @**0x87FF2**, `mov [esp+0x2c], eax` @**0x8803A**) — settle by reading those two blocks' producers; (ii) who sets the stored target word `[esi+0x146]/[esi+0x148]` — settle with a `--disp 0x146/0x148 --size 2` census. Neither gates kuluu behaviour while no record-side installer exists.
 
 **Census method, so the negative results are checkable.** `.text` linear sweep (`common.sweep_text`, 1,176,352 instructions): 28 write-form sites to `[reg+0x840]` (all read; masks listed above), 3 direct `test` ops on it (0xC87AF mask 0x400000, 0xCB9B6 mask 0x6000000, 0xD6D34 mask 0x80000 — a different bit family), and no `bts` anywhere near it. No odd-immediate OR writes to the dword other than `or al,1` @0x8822D; the two direct ops are mask 0x40000 (`or` @0xD6223) and its clear (`and 0xfffbffff` @0xD60A7). A whole-image scan for four-byte values in `[0x10087E00,0x10088300)` finds exactly **one** pointer (at file offset `0xAA4C54` -> `0x10088100`), so those blocks are *not* reachable through any function-pointer table — they are branch targets inside one large method, which is why a caller census returns nothing for them.
+## B-sexies. Who writes the stored look-at target words `ent+0x148` / mode word `ent+0x146` (pass of 2026-10-06, closes gap row A6's last open item)
+
+The settling read §B-quinquies named: a displacement census for both words (`xref.py --disp 0x148 --size 2`, then `0x146`).
+**Displacement collisions are real on this pair**, so each site is judged by what object it indexes, not by the offset.
+
+`+0x148`: 21 sites in 18 functions; `+0x146`: 8 sites in 8 functions. Split:
+
+**Entity-record writers (indexed through the entity array `.data 0x10480AF0`) — these are A6's event-side producers:**
+
+| site | what it stores | tier |
+|---|---|
+| `0xB88BD` / `0xB88C6` (func `0xB86EB`, the look-at opcode family §event_vm names `lookatone`) | target index = operand word `[esp+0x18]`; mode word = low half of `[partner+0x74]`, where the partner object is reached at `0xB889A..0xB889D` (`mov edx,[ecx+0x74] / mov ecx,[ecx+0x78]`) | [V] |
+| `0xB8A60` (func `0xB89D1`, the opcode-`0x7B` handler row in [event_opcode_table.md](event_opcode_table.md)) | `mov word ptr [eax + 0x148], 0xffff` — clears to "no target" | [V] |
+| `0xBCEE1` (func `0xBCC91`, inside EventIdle) | same clear, `word … 0xffff` | [V] |
+| `0xBD6A4` (func `0xBD5A8`, the XiEvent destructor path §B-quinquies already follows into release method `0x87E40`) | same clear, then `call 0x10087e40` @`0xBD6B8` | [V] |
+| `0x1343CB`, `0x1345CF`, `0x1343F3`, `0x1345F5` (funcs `0x13439B/0x1343D9/0x134401/0x1345A8/0x1345DB`) | store from register, guarded by `cmp word ptr [esi + 0x148], 0x11` (a comparison against **decimal-ish literal 0x11**) at `0x1343A5` / `0x1345A8` / `0x134409`; the taken arm then reads `[esi + 0x14A]`, scales it by 4 and calls `0x118DB0` | bytes [V]; what class these functions belong to is **[I]** — settle with their callers (`xref.py --to 0x13439B/0x1345A8`) |
+| record-side reset block in func `0x8A2B1`: `0x8A4C0` (writes `+0x148`, and neighbours `+0x14E/+0x150`, from `bx`) and `0x8A537` (writes `+0x146` with neighbours `+0x14A/+0x14C`) | zero/`bx` reset of the whole look-at word group alongside `[esi + 0x1D8] = 0x17` and `[esi + 0x120]` | bytes [V]; the function's class is **[I]** — settle by reading its callers |
+
+**Not entity records (do not cite for A6):** `0xE65F0/0xE671E` index a word array with `[reg + idx*2 + 0x148]`; `0x132CF4` and `0x143A3A` store into `+0x146` as one member of a long run of consecutive words copied from `.data 0x10485670/0x10485664` (a settings-style block, neighbours `+0x126/+0x166`); `0x2BF1A8/0x2BF267` and `0x2BF1AF/0x2BF233` are a serializer writing runs (`+0x144/+0x13C/+0x13A` in the same few instructions). Those four families share an offset, not a field.
+
+**Consequence for kuluu:** A6's target-type gate stays exactly as landed (it reads the wire record type), and no kuluu code is needed for `ent+0x148/+0x146` — retail writes them only from event opcodes, on the entity record, and clears them to `0xFFFF` at EventIdle / destructor. What still has no kuluu counterpart is the **record-side aim installer** that consumes them (`0x87E40`'s path §B-quinquies), i.e. an event-scripted look-at request; it needs its own row when event opcodes are ported, not a guess now.
+
 ## B-bis. The `actor+0xB2` visibility/flag WORD — full `.text` census (pass of 2026-10-05, for gap row A1)
 
 §B's look-point branch (`y −= 1.2f` when `target+0xB2 ≠ 0`) needs the field understood before it is
