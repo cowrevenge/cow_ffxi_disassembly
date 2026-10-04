@@ -227,13 +227,119 @@ have evidence to change by today.
 - Not yet mapped by anyone (their words): sky/sun/moon, water surface, PC shadow rendering,
   in-game settings object; weather selection by weather/time-of-day untraced.
 
-## 4c. Where the per-bone motion entries come from — three leads, none closed yet (pass of 2026-10-06, TDS 0x6A995428)
+## 4c. RESOLVED (2026-10-06): `desc+0x32` / `desc+0x3A` are the mo2 chunk payload — kuluu already parses that table
 
-Row D1's remaining kuluu work needs one thing first: which bytes in a clip's loaded data become the descriptor that `ApplyPolicy` walks (`u16 [desc+0x32]`, entries inline from `desc+0x3A` stride 0x54). Three facts from this pass, each byte-backed:
+Row D1 needed one thing to become kuluu code: which loaded bytes form the descriptor `ApplyPolicy` walks (count u16 `[desc+0x32]`, entries inline from `desc+0x3A`, stride 0x54, bone index first dword). It is **the mo2 skeleton-animation chunk**, and descriptor base and file payload differ by a constant `0x30` (the object prefix):
 
-- **Nothing writes that field explicitly.** A whole-`.text` census of *word-size* stores/loads at displacement `+0x32` (154 sites in 109 functions) contains exactly three hits inside the sqmo cluster — **0x1977B**, **0x19A61** (`ApplyPolicy`) and **0x1A304**, all reads. So `+0x32` is not filled by an assignment anywhere: it arrives with a bulk copy of the loaded block, or the descriptor's base is not where §4a implicitly assumed it was. That is why no DAT-side offset can be written down yet.
-- **The wrapper has no code caller and no vtable slot.** `xref --to 0x1AB60` = 0 hits; a full-image dword scan for `0x1001AB60` finds exactly one occurrence, in `.rdata` at **0x32A1F8**, inside a registry-shaped table (neighbours: function pointers 0x1001A830..0x1001ABE0 interleaved with string addresses `.rdata 0x3510BC`, `0x3515A0` and size words like 0x14). So the entry point into `setNextMotion` is through that registered dispatcher. Settling reads, in order: dump `.rdata 0x32A1C8..0x32A260` with its strings to get the method/class names; find who indexes that table (scan for the table base); read the owner's constructor — its allocation size decides whether the 0x54-stride entries are inline in one block copied from the file, and if they are, `+0x32`/`+0x3A` become file-relative offsets directly.
-- **The old "motion object vtable" lead is dead for this purpose.** `.rdata 0x32B654` (labelled in mob_evidence_1 as the motion-object vtable, clip name at +0x30, model id at +0x44) has only three raw hits, all inside `0x532F0 / 0x53420 / 0x541D4`, and the code that stores it (RVA **0x532DE**, in a constructor whose object reaches `+0xDC` with scheduler-node fields) is CMo* effect-element territory — exactly the region §4a's caller census found for 0x547A0/0x546F0. Do not look for sqmoMotion there.
+| descriptor field | payload offset | what it is |
+|---|---|---|
+| `[desc+0x32]` | **payload + 2** | u16 joint count — how many entries ApplyPolicy loops |
+| `[desc+0x3A]` | **payload + 0xA** (kuluu's `POOL_START`) | the entry array, inline |
+
+One entry is exactly **0x54 bytes**, which is the stride of `add eax,0x54` (RVA 0x19AEB), and it is what kuluu's own reader walks (`ffxi-dat/src/skel_anim.rs`: bone index dword, then rotation / translation / scale channel groups, each as *N* i32 offsets followed by *N* f32 constants — `read_sequences`):
+
+| entry offset | field | size |
+|---|---|---|
+| +0x00 | bone index (the `mov esi,[eax]` at RVA 0x19A83) | 0x04 |
+| +0x04 / +0x14 | rotation: 4 channel offsets / 4 constants | 0x10 each |
+| +0x24 / +0x30 | translation: 3 offsets / 3 constants | 0x0C each |
+| +0x3C / +0x48 | scale: 3 offsets / 3 constants | 0x0C each |
+
+Four consequences:
+
+- **Nothing writes `[desc+0x32]` in `.text`** because the block is file data copied in whole — that is why the word-store census at displacement `+0x32` (154 sites, 109 functions) found exactly three inside sqmo (**0x1977B**, **0x19A61** = ApplyPolicy, **0x1A304**), all reads.
+- kuluu's `SkeletonAnimation::key_frame_sets`, keyed by joint index, **is** the parsed motion-entry table. A bone missing from that map is a bone the clip does not key. Row D1 has no read outstanding; what it needed was this parse-level identity.
+- The registry lead keeps its shape but blocks nothing: `setNextMotion`'s wrapper 0x1AB60 still has zero code callers and one pointer, `.rdata` **0x32A1F8** in a name-registry-shaped table, so *who* runs the policy per request stays registered-dispatch territory (§4a). Nothing above changes because of it. The old `.rdata 0x32B654` "motion object vtable" lead remains dead — its only storer is the CMo* effect-element constructor at RVA 0x532DE.
+- **Still [I] on this row:** whether a channel-offset word carries meaning in its sign/high bits. kuluu drops any entry with a negative offset (`read_sequences` returns `None`), which makes that bone unkeyed; §4e shows retail masks the same word before using it as a key index (`and ecx,0x7fffffff` @RVA 0x19F46). Settling read: take shipped hume clips, and for each entry whose rotation-channel-0 offset is negative check whether ApplyPolicy-style dispatch visits that bone with category ≠ 0 — if yes the sign encodes per-bone state and kuluu's skip is wrong; if they never reach a handler it is harmless.
+
+## 4d. The pose scratch: who owns each field of the stride-0x34 record **[V]** (pass of 2026-10-06)
+
+`ApplyPolicy` does **not** write the scratch (§4e); its only global write is one mask bit. The record's owner is `MotionQueue_UpdateAllChannels`' reset pass, whose own stores pin the layout §4 claimed [web] (`C:/tmp/ffximain_work/d1_update_all.asm`, generated listing):
+
+```
+1001A463  mov      esi, 0x1045f040                     ; record base + 0x10 (scratch = 0x1045F030)
+1001A474  lea      eax, [esi - 0x10]
+1001A47D  mov      dword ptr [eax], ecx                ; quat.x ← global [0x10456d2c]
+1001A485  mov      dword ptr [eax + 4], edx            ; quat.y ← [0x10456d30]
+1001A488  mov      dword ptr [eax + 8], ecx            ; quat.z ← [0x10456d34]
+1001A491  mov      dword ptr [eax + 0xc], edx          ; quat.w ← [0x10456d38]
+1001A477  push     0x10456d3c                          ; src: vec3 default
+1001A47C  push     esi                                 ; dst: record+0x10
+1001A494  call     0x10026eb0                          ; copy3
+1001A499  lea      eax, [esi + 0xc]                    ; record+0x1C …
+1001A49C  push     0x1035109c                          ; src: (first float 1.0)
+1001A4A1  push     eax                                 ; dst: record+0x1C
+1001A4A2  call     0x10026eb0
+1001A4B0  add      esi, 0x34                           ; stride, [0x10462430] bones
+```
+
+So a record is **quat +0x00 / translation +0x10 / scale +0x1C**, with `+0x28..+0x34` untouched by this pass. Every frame, before any sampling, all bones reset to those globals — §4's "reset to defaults", now [V] in our build.
+
+Sampling order and the mask arming, same listing:
+
+```
+1001A4E8  mov      edi, 4                              ; base slot index descends 4 → 0
+1001A4ED  mov      eax, dword ptr [ebp + 4]            ; slot+4 = its motion list head
+1001A4F2  je       0x1001a52a                          ; empty slot: never sampled
+1001A4F4  push     0x1045f030 / push edi
+1001A4FC  call     0x1001b230                          ; sampler writes only the bones it keys
+… after every sampled slot …
+1001A50D  mov      esi, dword ptr [0x1045f028]         ; g_pBoneMotionMask
+1001A516  test     al, 0x3f                            ; bone has a channel category?
+1001A51A  or       al, 0x40                            ; → arm bit6 ("touched")
+```
+
+No mask check exists inside sampling: every active slot overwrites per bone, so **the lowest-indexed active base layer that keys a bone owns it** ✓. Blend layers then merge on top:
+
+```
+1001A557  mov      bl, byte ptr [ecx + eax]
+1001A560  and      bl, 0x80                            ; masks first reduced to bit7 only
+1001A571  push     0x1045b820                          ; blend scratch (separate from the pose scratch)
+… per bone …
+1001A5A3  test     al, al / jns skip                   ; bit7 must be set
+1001A5A7  test     al, 0x3f / je skip                  ; and a category present
+1001A5C0  call     0x10033220                          ; the merge law of §4a-bis
+1001A5C5..1001A5D8                                    ; its four dwords copied into the pose scratch
+1001A5DF  call     0x10032a70
+1001A5F4 / 1001A609  call 0x100276a0                   ; lerp translation (+0x10), scale (+0x1C)
+```
+
+Two points §4/§4a only asserted: **bit6 is armed inline after every base-slot sample** (helper 0x19B00 does the same thing wholesale, and both exist), and the call immediately after the quaternion store is `call 0x32A70`, whose body at that RVA — generated dump of RVA 0x32A40..0x32A71 — is a lone `ret`. "No renormalisation follows the merge" is therefore proven *at the site*, not inferred from absence.
+
+## 4e. What ApplyPolicy and its handlers do: one mask bit, then per-bone key-frame blending **[V]**
+
+Transcribed in full (`d1_apply_policy.asm`, `d1_policy_h0_full.asm`, `d1_policy_h1_full.asm`). Body RVA 0x19A50..0x19AFD (`ret 0x10`):
+
+```
+10019A61  movsx    ecx, word ptr [ebx + 0x32]           ; entry count (§4c)
+10019A76  lea      eax, [ebx + 0x3a]                    ; entry array
+10019A83  mov      esi, dword ptr [eax]                 ; bone index
+10019A92  mov      al, byte ptr [eax + esi]             ; mask[bone]; jns skip → bit7 clear = refuse
+10019A9B  and      dl, 0x40 / cmp dl,0x40 / je …         ; bit6 armed = skip (another layer owns it)
+10019AA3  and      eax, 0x3f                            ; low 6 bits = category
+10019AA9  sub      eax, 0 / je 0x10019ac5               ; category 0 → handler RVA 0x19B30
+10019AAB  dec      eax / jne skip                       ; category 1 → handler RVA 0x19EE0; else none
+10019AD0  call     0x10019b30                           ; the category-0 handler below
+10019AD5  test     al, al / je 0x10019ae2               ; false → mask untouched
+10019AD9  mov      eax, dword ptr [0x1045f028]          ; g_pBoneMotionMask
+10019ADE  or       byte ptr [eax + esi], 1              ; handler returned true: mask bit0 (category ← 1)
+10019AEB  add      eax, 0x54                            ; stride ✓ §4c
+```
+
+ApplyPolicy's only global write is that `or byte [mask+bone], 1` — it never touches the pose scratch. Both handlers are per-bone key-frame blends rather than booleans: they convert a float argument with the ftoi helper (`call 0x10311c2c`), initialise an output quaternion via `call 0x32a40`, index **the same entry block** at pool + (masked channel offset + frame) and merge. h0 (category 0): `call 0x10033220` @RVA 0x19C3B then four dword stores @0x19C44..0x19C59. h1 (category 1): two merges, @0x19F91 and @0x1A00E with stores @0x19FEB..0x1AFFC. Key addressing, verbatim:
+
+```
+10019F2E  lea      edx, [esi + edi*4 + 0x3e]            ; entry+0x04 = rotation channel-0 offset (edi counts stride 0x54)
+10019F32  mov      ecx, dword ptr [edx]
+10019F36  je       skip                                 ; offset 0 → constant-only bone
+10019F46  and      ecx, 0x7fffffff                      ; sign bit masked off before use
+10019F4E  lea      ebp, [ecx + ebx]                     ; ebx = ftoi_round(float arg)
+10019F55  mov      ebp, dword ptr [esi + ebp*4 + 0x3a]  ; pool word = an authored key
+```
+
+So "interrupt vs queue" in this build means: *for each bone the queued motion keys*, refuse it if the mask says no, otherwise **blend neighbouring authored keys of that bone** through the same `0x33220` law as the blend layers — one merge for category 0, two for category 1. §4a-bis's aside "helper at 0x332D9, result unused" now has a body: `call 0x32a40` wraps RVA 0x32A50, which stores `[ecx]=0,[+4]=0,[+8]=0,[+0xC]=0x3F800000`, i.e. it initialises the merge output to identity before the weighted sum.
+
+kuluu consequence (gaps row D1): write-set = bones a clip keys ∩ mask allows; per-bone ownership by sampler order; one merge law everywhere (`merge_layer_rotation`) — all landed with this pass. Not reproduced, and named as such: category-dispatched neighbour-key blending (kuluu interpolates within a clip through its own normalising `nlerp`, whose law stays [I] per §4a-bis), because it needs the sign/flag question in §4c settled first.
 
 ## 5a. Verified in OUR build: LockLookAt ≠ ActorRotation (byte), correcting §3's shared lead [V]
 
