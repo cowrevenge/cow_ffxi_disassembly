@@ -227,6 +227,14 @@ have evidence to change by today.
 - Not yet mapped by anyone (their words): sky/sun/moon, water surface, PC shadow rendering,
   in-game settings object; weather selection by weather/time-of-day untraced.
 
+## 4c. Where the per-bone motion entries come from — three leads, none closed yet (pass of 2026-10-06, TDS 0x6A995428)
+
+Row D1's remaining kuluu work needs one thing first: which bytes in a clip's loaded data become the descriptor that `ApplyPolicy` walks (`u16 [desc+0x32]`, entries inline from `desc+0x3A` stride 0x54). Three facts from this pass, each byte-backed:
+
+- **Nothing writes that field explicitly.** A whole-`.text` census of *word-size* stores/loads at displacement `+0x32` (154 sites in 109 functions) contains exactly three hits inside the sqmo cluster — **0x1977B**, **0x19A61** (`ApplyPolicy`) and **0x1A304**, all reads. So `+0x32` is not filled by an assignment anywhere: it arrives with a bulk copy of the loaded block, or the descriptor's base is not where §4a implicitly assumed it was. That is why no DAT-side offset can be written down yet.
+- **The wrapper has no code caller and no vtable slot.** `xref --to 0x1AB60` = 0 hits; a full-image dword scan for `0x1001AB60` finds exactly one occurrence, in `.rdata` at **0x32A1F8**, inside a registry-shaped table (neighbours: function pointers 0x1001A830..0x1001ABE0 interleaved with string addresses `.rdata 0x3510BC`, `0x3515A0` and size words like 0x14). So the entry point into `setNextMotion` is through that registered dispatcher. Settling reads, in order: dump `.rdata 0x32A1C8..0x32A260` with its strings to get the method/class names; find who indexes that table (scan for the table base); read the owner's constructor — its allocation size decides whether the 0x54-stride entries are inline in one block copied from the file, and if they are, `+0x32`/`+0x3A` become file-relative offsets directly.
+- **The old "motion object vtable" lead is dead for this purpose.** `.rdata 0x32B654` (labelled in mob_evidence_1 as the motion-object vtable, clip name at +0x30, model id at +0x44) has only three raw hits, all inside `0x532F0 / 0x53420 / 0x541D4`, and the code that stores it (RVA **0x532DE**, in a constructor whose object reaches `+0xDC` with scheduler-node fields) is CMo* effect-element territory — exactly the region §4a's caller census found for 0x547A0/0x546F0. Do not look for sqmoMotion there.
+
 ## 5a. Verified in OUR build: LockLookAt ≠ ActorRotation (byte), correcting §3's shared lead [V]
 
 §3 listed `CMoLockLookAtDriveTask` / `CMoActorRotationDriveTask` together as the look-at lead. They are **two different mechanisms**
