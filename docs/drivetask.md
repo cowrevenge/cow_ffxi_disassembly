@@ -386,11 +386,11 @@ the bytes we guessed.
   routines `seq*` interleaved with `ref09 st01/del2` and the 10-dword `0x27` stages — an
   effect/ability sequence library, not a model DAT):
 
-  ```text
+```text
   a9 06 | 3c 00 c0 03 | 00 00 00 00 | 00 00 b4 42 | 00 00 00 00 [| unprinted dword]
                         rec+8 = 0.0f   rec+C = angle   rec+0x10 = 0.0f
   angles seen: +90, -90, -135 (x2), +45      (dword grid below record base)
-  ```
+```
 
   Why this shape matters **[I]:** §5b showed the case we attributed to 168 pushes record fields
   `+8 / +C / +0x10` and the ctor converts **three** values × π/180 into a target euler. `0xA9` supplies
@@ -1202,3 +1202,602 @@ Still open on this row (unchanged by §15): who *renders* facing from `actor+0x6
 found that composes a world orientation from it — kuluu lands the value on its own facing-field chain, and that is
 a kuluu choice, not a proven-identical landing site. Also open: `[actor+0x102]` and the third writer of
 `[actor+0x7A4]` (§14.3), both left at their constructor values in kuluu with these names as the settling reads.
+**§16 below closes both of those.**
+
+## 16. The facing renderer, the airborne byte, and what stage `0x7A` really is (re-read byte-for-byte,
+2026-10-06) **[V]**
+
+Four facts, each re-read from raw bytes in `FFXiMain.unpacked.dll` TDS `0x6A995428`; listings generated with
+`disasm.py --func/--rva`, never transcribed. Two of them **correct earlier wording** — see §16.3.
+
+### 16.1 The actor world matrix composes identity → ·Rz → ·Ry → ·Rx, then translation **[V]**
+
+The consumer §15 left open is **`0xC4B50`**, one body ending `ret 8` (so a virtual, and its out-and-arg shape matches
+the other matrix builders):
+
+```text
+  000C4B50  56                         push esi
+  000C4B51  57                         push edi
+  000C4B52  8b 7c 24 10                mov edi, dword ptr [esp + 0x10]
+  000C4B56  8b f1                      mov esi, ecx
+  000C4B58  8b cf                      mov ecx, edi
+  000C4B5A  e8 51 2e f6 ff             call 0x100279b0
+  000C4B5F  8b 06                      mov eax, dword ptr [esi]
+  000C4B61  8b ce                      mov ecx, esi
+  000C4B63  ff 90 c0 01 00 00          call dword ptr [eax + 0x1c0]
+  000C4B69  8b 48 08                   mov ecx, dword ptr [eax + 8]
+  000C4B6C  51                         push ecx
+  000C4B6D  8b cf                      mov ecx, edi
+  000C4B6F  e8 ac 30 f6 ff             call 0x10027c20
+  000C4B74  8b 16                      mov edx, dword ptr [esi]
+  000C4B76  8b ce                      mov ecx, esi
+  000C4B78  ff 92 c0 01 00 00          call dword ptr [edx + 0x1c0]
+  000C4B7E  8b 40 04                   mov eax, dword ptr [eax + 4]
+  000C4B81  8b cf                      mov ecx, edi
+  000C4B83  50                         push eax
+  000C4B84  e8 47 30 f6 ff             call 0x10027bd0
+  000C4B89  8b 16                      mov edx, dword ptr [esi]
+  000C4B8B  8b ce                      mov ecx, esi
+  000C4B8D  ff 92 c0 01 00 00          call dword ptr [edx + 0x1c0]
+  000C4B93  8b 00                      mov eax, dword ptr [eax]
+  000C4B95  8b cf                      mov ecx, edi
+  000C4B97  50                         push eax
+  000C4B98  e8 e3 2f f6 ff             call 0x10027b80
+  000C4B9D  8b 16                      mov edx, dword ptr [esi]
+  000C4B9F  8b ce                      mov ecx, esi
+  000C4BA1  ff 92 bc 01 00 00          call dword ptr [edx + 0x1bc]
+  000C4BA7  50                         push eax
+  000C4BA8  8b cf                      mov ecx, edi
+  000C4BAA  e8 41 31 f6 ff             call 0x10027cf0
+  000C4BAF  5f                         pop edi
+  000C4BB0  b0 01                      mov al, 1
+  000C4BB2  5e                         pop esi
+```
+
+Read with the three rotation helpers' own bodies — each builds one axis rotation on scratch by `fsin`/`fcos`, then
+post-multiplies it (`call 0x10027d10`), in the column-major, translation-in-the-fourth-column layout §E.13 proved:
+
+```text
+  00027B80  83 ec 40                   sub esp, 0x40
+  00027B83  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027B87  d9 fe                      fsin 
+  00027B89  8b d1                      mov edx, ecx
+  00027B8B  8d 4c 24 00                lea ecx, [esp]
+  00027B8F  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027B93  d9 ff                      fcos 
+  00027B95  e8 16 fe ff ff             call 0x100279b0
+  00027B9A  d9 54 24 14                fst dword ptr [esp + 0x14]
+  00027B9E  d9 c1                      fld st(1)
+  00027BA0  8d 44 24 00                lea eax, [esp]
+  00027BA4  8b ca                      mov ecx, edx
+  00027BA6  d9 5c 24 18                fstp dword ptr [esp + 0x18]
+  00027BAA  d9 c9                      fxch st(1)
+  00027BAC  d9 e0                      fchs 
+  00027BAE  d9 5c 24 24                fstp dword ptr [esp + 0x24]
+  00027BB2  50                         push eax
+  00027BB3  d9 5c 24 2c                fstp dword ptr [esp + 0x2c]
+  00027BB7  e8 54 01 00 00             call 0x10027d10
+  00027BBC  83 c4 40                   add esp, 0x40
+  00027BBF  c2 04 00                   ret 4
+```
+```text
+  00027BD0  83 ec 40                   sub esp, 0x40
+  00027BD3  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027BD7  d9 fe                      fsin 
+  00027BD9  8b d1                      mov edx, ecx
+  00027BDB  8d 4c 24 00                lea ecx, [esp]
+  00027BDF  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027BE3  d9 ff                      fcos 
+  00027BE5  e8 c6 fd ff ff             call 0x100279b0
+  00027BEA  d9 54 24 00                fst dword ptr [esp]
+  00027BEE  d9 c1                      fld st(1)
+  00027BF0  d9 e0                      fchs 
+  00027BF2  d9 5c 24 08                fstp dword ptr [esp + 8]
+  00027BF6  d9 c9                      fxch st(1)
+  00027BF8  d9 5c 24 20                fstp dword ptr [esp + 0x20]
+  00027BFC  8d 44 24 00                lea eax, [esp]
+  00027C00  8b ca                      mov ecx, edx
+  00027C02  d9 5c 24 28                fstp dword ptr [esp + 0x28]
+  00027C06  50                         push eax
+  00027C07  e8 04 01 00 00             call 0x10027d10
+  00027C0C  83 c4 40                   add esp, 0x40
+  00027C0F  c2 04 00                   ret 4
+```
+```text
+  00027C20  83 ec 40                   sub esp, 0x40
+  00027C23  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027C27  d9 fe                      fsin 
+  00027C29  8b d1                      mov edx, ecx
+  00027C2B  8d 4c 24 00                lea ecx, [esp]
+  00027C2F  d9 44 24 44                fld dword ptr [esp + 0x44]
+  00027C33  d9 ff                      fcos 
+  00027C35  e8 76 fd ff ff             call 0x100279b0
+  00027C3A  d9 54 24 00                fst dword ptr [esp]
+  00027C3E  d9 c1                      fld st(1)
+  00027C40  8d 44 24 00                lea eax, [esp]
+  00027C44  8b ca                      mov ecx, edx
+  00027C46  d9 5c 24 04                fstp dword ptr [esp + 4]
+  00027C4A  d9 c9                      fxch st(1)
+  00027C4C  d9 e0                      fchs 
+  00027C4E  d9 5c 24 10                fstp dword ptr [esp + 0x10]
+  00027C52  50                         push eax
+  00027C53  d9 5c 24 18                fstp dword ptr [esp + 0x18]
+  00027C57  e8 b4 00 00 00             call 0x10027d10
+  00027C5C  83 c4 40                   add esp, 0x40
+  00027C5F  c2 04 00                   ret 4
+```
+
+So `M = Rz(euler[2]) · Ry(euler[1]) · Rx(euler[0])`, all three components of the angle record are **live** in the
+world matrix — which retires the sentence in kuluu's `rotation_drives.rs` that only the heading component has a
+named meaning. Applied to a vector, rightmost first: `Rx` acts first, then yaw, then roll.
+
+### 16.2 `[actor+0x102]` = airborne; stage `0x5E` (kuluu's Knockback) is what sets it **[V]**
+
+Census of byte-sized memory operands at displacement `0x102` (`xref.py --disp 0x102 --size 1`): **15 sites in 14
+functions**, every one on the actor object — ctor init, two writers, twelve readers. The three writes:
+
+```text
+  000A8A35  88 9e 02 01 00 00          mov byte ptr [esi + 0x102], bl
+  000A8A3B  89 9e fc 00 00 00          mov dword ptr [esi + 0xfc], ebx
+  000A8A41  88 9e 00 01 00 00          mov byte ptr [esi + 0x100], bl
+```
+
+constructor zero, alongside its neighbour flags `+0xFB`, `+0x100`, `+0x103`, `+0x104` (`bl` = 0)
+
+```text
+  000AAAB3  84 c0                      test al, al
+  000AAAB5  89 8e 14 01 00 00          mov dword ptr [esi + 0x114], ecx
+  000AAABB  75 11                      jne 0x100aaace
+  000AAABD  8b 16                      mov edx, dword ptr [esi]
+  000AAABF  8b ce                      mov ecx, esi
+  000AAAC1  ff 92 60 01 00 00          call dword ptr [edx + 0x160]
+  000AAAC7  8b ce                      mov ecx, esi
+  000AAAC9  e8 32 88 fd ff             call 0x10083300
+  000AAACE  c6 86 02 01 00 00 01       mov byte ptr [esi + 0x102], 1
+  000AAAD5  5f                         pop edi
+  000AAAD6  5e                         pop esi
+  000AAAD7  83 c4 10                   add esp, 0x10
+```
+
+jump start: if not already airborne, call vtable slot byte `+0x160`, then `0x10083300`, **then set the flag** —
+inside the function starting `0xAA940`.
+
+```text
+  000AACFC  8d 86 30 01 00 00          lea eax, [esi + 0x130]
+  000AAD02  50                         push eax
+  000AAD03  50                         push eax
+  000AAD04  e8 27 c8 f7 ff             call 0x10027530
+  000AAD09  d8 1d 3c e8 32 10          fcomp dword ptr [0x1032e83c]
+  000AAD0F  83 c4 08                   add esp, 8
+  000AAD12  df e0                      fnstsw ax
+  000AAD14  f6 c4 05                   test ah, 5
+  000AAD17  7a 18                      jp 0x100aad31
+  000AAD19  8b 16                      mov edx, dword ptr [esi]
+  000AAD1B  8b ce                      mov ecx, esi
+  000AAD1D  c6 86 02 01 00 00 00       mov byte ptr [esi + 0x102], 0
+  000AAD24  ff 92 64 01 00 00          call dword ptr [edx + 0x164]
+  000AAD2A  8b ce                      mov ecx, esi
+  000AAD2C  e8 df 85 fd ff             call 0x10083310
+  000AAD31  5f                         pop edi
+  000AAD32  5e                         pop esi
+  000AAD33  5b                         pop ebx
+  000AAD34  83 c4 10                   add esp, 0x10
+  000AAD37  c2 04 00                   ret 4
+```
+
+landing: squared length of the vector at `[actor+0x130]` (`call 0x27530` on itself) compared against `.rdata
+0x32E83C`; flag cleared **before** vtable slot byte `+0x164` and its companion `0x10083310`. Flag convention per
+[joint.md](joint.md) §8a (`test ah,5` + `jp` ⟺ ST ≥ src): the clear path is taken when the squared length is
+**strictly below** the constant — so `[0x1032E83C] = 9.0e-6`, i.e. |v| < 3e-3, an epsilon on a collapsed vector,
+not a velocity threshold.
+
+Who reaches jump start: the handler for **stage byte `0x5E`**, body `0x5AB63..0x5AC96` (owner established by walking
+the stage dispatch table at `.rdata 0x1005DF24`, whose cells hold absolute VAs; cell for index `0x5E-2` reads
+`63 ab 05 10` → handler `0x5AB63`). Two exits from that body reach the setter:
+
+```text
+  0005ABF1  74 19                      je 0x1005ac0c
+  0005ABF3  8b 40 14                   mov eax, dword ptr [eax + 0x14]
+  0005ABF6  8b 4c 24 10                mov ecx, dword ptr [esp + 0x10]
+  0005ABFA  8b 54 24 14                mov edx, dword ptr [esp + 0x14]
+  0005ABFE  50                         push eax
+  0005ABFF  51                         push ecx
+  0005AC00  52                         push edx
+  0005AC01  53                         push ebx
+  0005AC02  55                         push ebp
+  0005AC03  8b cf                      mov ecx, edi
+  0005AC05  e8 36 fd 04 00             call 0x100aa940
+  0005AC0A  eb 2b                      jmp 0x1005ac37
+  0005AC0C  8b 4c 24 18                mov ecx, dword ptr [esp + 0x18]
+  0005AC10  85 c9                      test ecx, ecx
+  0005AC12  74 3e                      je 0x1005ac52
+  0005AC14  e8 47 37 00 00             call 0x1005e360
+  0005AC19  25 ff ff 00 00             and eax, 0xffff
+  0005AC1E  85 c0                      test eax, eax
+  0005AC20  74 74                      je 0x1005ac96
+  0005AC22  50                         push eax
+  0005AC23  8b 86 88 00 00 00          mov eax, dword ptr [esi + 0x88]
+  0005AC29  0f bf 48 0a                movsx ecx, word ptr [eax + 0xa]
+  0005AC2D  51                         push ecx
+  0005AC2E  53                         push ebx
+  0005AC2F  55                         push ebp
+  0005AC30  8b cf                      mov ecx, edi
+  0005AC32  e8 a9 fc 04 00             call 0x100aa8e0
+  0005AC37  8b cf                      mov ecx, edi
+```
+
+…where `call 0x100aa940` is jump start direct, and `call 0x100aa8e0` is a wrapper that substitutes one of eight
+authored presets before falling into it:
+
+```text
+  000AA8E0  51                         push ecx
+  000AA8E1  8b 44 24 14                mov eax, dword ptr [esp + 0x14]
+  000AA8E5  83 f8 08                   cmp eax, 8
+  000AA8E8  7d 4c                      jge 0x100aa936
+  000AA8EA  8d 04 40                   lea eax, [eax + eax*2]
+  000AA8ED  c1 e0 02                   shl eax, 2
+  000AA8F0  8b 90 60 bc 35 10          mov edx, dword ptr [eax + 0x1035bc60]
+  000AA8F6  89 54 24 14                mov dword ptr [esp + 0x14], edx
+  000AA8FA  8b 90 64 bc 35 10          mov edx, dword ptr [eax + 0x1035bc64]
+  000AA900  89 54 24 00                mov dword ptr [esp], edx
+  000AA904  8b 54 24 10                mov edx, dword ptr [esp + 0x10]
+  000AA908  85 d2                      test edx, edx
+  000AA90A  74 0a                      je 0x100aa916
+  000AA90C  d9 44 24 14                fld dword ptr [esp + 0x14]
+  000AA910  d9 e0                      fchs 
+  000AA912  d9 5c 24 14                fstp dword ptr [esp + 0x14]
+  000AA916  8b 80 68 bc 35 10          mov eax, dword ptr [eax + 0x1035bc68]
+  000AA91C  8b 54 24 00                mov edx, dword ptr [esp]
+  000AA920  50                         push eax
+  000AA921  8b 44 24 18                mov eax, dword ptr [esp + 0x18]
+  000AA925  52                         push edx
+  000AA926  8b 54 24 14                mov edx, dword ptr [esp + 0x14]
+  000AA92A  50                         push eax
+  000AA92B  8b 44 24 14                mov eax, dword ptr [esp + 0x14]
+  000AA92F  52                         push edx
+  000AA930  50                         push eax
+  000AA931  e8 0a 00 00 00             call 0x100aa940
+  000AA936  59                         pop ecx
+  000AA937  c2 10 00                   ret 0x10
+```
+
+i.e. an index below 8 selects a triple-dword preset at `.data 0x1035BC60/+4/+8` (stride `0xC`) and negates one
+component when the `[edx]` flag is set; index ≥ 8 skips the call entirely (`jge 0xaa936`). Stage byte `0x5E` is what
+kuluu already parses as `StageKind::Knockback`, so **the airborne flag's producer is a stage kuluu ships** — no
+invented state needed to honour the gate below.
+
+The gate itself sits at the top of the scripted-turn branch inside the actor update (§14.6/§15.6 territory, body
+`0xC63D0..`) and reads, in order:
+
+```text
+  000C6691  32 db                      xor bl, bl
+  000C6693  ff 90 18 03 00 00          call dword ptr [eax + 0x318]
+  000C6699  85 c0                      test eax, eax
+  000C669B  0f 85 a9 08 00 00          jne 0x100c6f4a
+  000C66A1  8a 86 02 01 00 00          mov al, byte ptr [esi + 0x102]
+  000C66A7  84 c0                      test al, al
+  000C66A9  0f 85 9b 08 00 00          jne 0x100c6f4a
+  000C66AF  83 be a4 07 00 00 ff       cmp dword ptr [esi + 0x7a4], -1
+  000C66B6  0f 85 8e 08 00 00          jne 0x100c6f4a
+  000C66BC  8b 86 6c 08 00 00          mov eax, dword ptr [esi + 0x86c]
+  000C66C2  85 c0                      test eax, eax
+  000C66C4  0f 84 15 01 00 00          je 0x100c67df
+```
+
+So the per-frame yaw step runs only when **no orientation is held** (refcount §15.2), **the actor is not airborne**,
+**`actor+0x7A4 == -1`** (§16.3) and `[actor+0x86C] != 0`; anything else leaves the branch, and `[actor+0x86C] == 0`
+falls to the turn-toward-wire-heading path (M27).
+
+### 16.3 Stage `0x7A` is an authored **jump-at-an-actor**, and `+0x7A4` holds a slot id, not an actor index **[V]**
+
+Correcting two phrasings I had been handed for this row — "stage 0x7A = FaceActor" and "`[actor+0x7A4]` = face-target
+**actor index**". The bytes say otherwise; both are recorded as read, not paraphrased.
+
+Stage byte `0x7A`, dispatch cell case-index `120` at `.rdata 0x5DDFC` (`c9 c7 05 10` → handler **`0x5C7C9`**),
+allocates the standard `0x78` task and hands it to ctor **`0x61FD0`** (`ret 0x18`, six args):
+
+```text
+  0005C7C9  6a 78                      push 0x78
+  0005C7CB  e8 70 18 00 00             call 0x1005e040
+  0005C7D0  8b d8                      mov ebx, eax
+  0005C7D2  83 c4 04                   add esp, 4
+  0005C7D5  85 db                      test ebx, ebx
+  0005C7D7  0f 84 b9 e4 ff ff          je 0x1005ac96
+  0005C7DD  8b be 88 00 00 00          mov edi, dword ptr [esi + 0x88]
+  0005C7E3  8b ce                      mov ecx, esi
+  0005C7E5  e8 a6 1d 00 00             call 0x1005e590
+  0005C7EA  e8 3d 54 2b 00             call 0x10311c2c
+  0005C7EF  50                         push eax
+  0005C7F0  8b 47 20                   mov eax, dword ptr [edi + 0x20]
+  0005C7F3  8d 57 10                   lea edx, [edi + 0x10]
+  0005C7F6  8b ce                      mov ecx, esi
+  0005C7F8  52                         push edx
+  0005C7F9  50                         push eax
+  0005C7FA  e8 d1 5f 00 00             call 0x100627d0
+  0005C7FF  50                         push eax
+  0005C800  8b ce                      mov ecx, esi
+  0005C802  e8 69 5f 00 00             call 0x10062770
+  0005C807  50                         push eax
+  0005C808  56                         push esi
+  0005C809  8b cb                      mov ecx, ebx
+  0005C80B  e8 c0 57 00 00             call 0x10061fd0
+  0005C810  33 c0                      xor eax, eax
+  0005C812  5f                         pop edi
+  0005C813  5e                         pop esi
+  0005C814  5d                         pop ebp
+  0005C815  5b                         pop ebx
+  0005C816  81 c4 54 02 00 00          add esp, 0x254
+  0005C81C  c3                         ret
+```
+
+`0x627D0` is not an actor-by-id lookup; it walks a container for the first entry that *is* a doll actor:
+
+```text
+  000627D0  56                         push esi
+  000627D1  57                         push edi
+  000627D2  8d 79 34                   lea edi, [ecx + 0x34]
+  000627D5  8b cf                      mov ecx, edi
+  000627D7  e8 24 8f fd ff             call 0x1003b700
+  000627DC  8b f0                      mov esi, eax
+  000627DE  85 f6                      test esi, esi
+  000627E0  74 31                      je 0x10062813
+  000627E2  68 10 f9 32 10             push 0x1032f910
+  000627E7  8b ce                      mov ecx, esi
+  000627E9  e8 02 a1 fc ff             call 0x1002c8f0
+  000627EE  84 c0                      test al, al
+  000627F0  74 21                      je 0x10062813
+  000627F2  8d 8e c4 00 00 00          lea ecx, [esi + 0xc4]
+  000627F8  e8 d3 8e fd ff             call 0x1003b6d0
+  000627FD  8b f0                      mov esi, eax
+  000627FF  85 f6                      test esi, esi
+  00062801  74 15                      je 0x10062818
+  00062803  68 10 f9 32 10             push 0x1032f910
+  00062808  8b ce                      mov ecx, esi
+  0006280A  e8 e1 a0 fc ff             call 0x1002c8f0
+  0006280F  84 c0                      test al, al
+  00062811  75 df                      jne 0x100627f2
+  00062813  8b c6                      mov eax, esi
+  00062815  5f                         pop edi
+  00062816  5e                         pop esi
+  00062817  c3                         ret
+```
+
+`call 0x3b700` takes the container's first element, `push 0x1032F910 / call 0x2c8f0` is an `IsInstanceOf`-style test
+against a class descriptor whose name pointer at `.data 0x1035BD78` reads **"CXiDollActor"** (`tables_classnames.csv`),
+and the walk advances through `[node+0xC4]` via `call 0x3b6d0`.
+
+The ctor then writes four things, all into the *actor* argument (not the task):
+
+```text
+  00061FD0  8b 44 24 04                mov eax, dword ptr [esp + 4]
+  00061FD4  53                         push ebx
+  00061FD5  55                         push ebp
+  00061FD6  56                         push esi
+  00061FD7  57                         push edi
+  00061FD8  50                         push eax
+  00061FD9  8b f9                      mov edi, ecx
+  00061FDB  e8 b0 27 01 00             call 0x10074790
+  00061FE0  8d 5f 34                   lea ebx, [edi + 0x34]
+  00061FE3  8b cb                      mov ecx, ebx
+  00061FE5  e8 56 95 fd ff             call 0x1003b540
+  00061FEA  db 44 24 28                fild dword ptr [esp + 0x28]
+  00061FEE  8b 74 24 18                mov esi, dword ptr [esp + 0x18]
+  00061FF2  8b cb                      mov ecx, ebx
+  00061FF4  56                         push esi
+  00061FF5  c7 07 28 bf 32 10          mov dword ptr [edi], 0x1032bf28
+  00061FFB  d9 5f 74                   fstp dword ptr [edi + 0x74]
+  00061FFE  c7 03 0c bf 32 10          mov dword ptr [ebx], 0x1032bf0c
+  00062004  e8 a7 97 fd ff             call 0x1003b7b0
+  00062009  8b 6c 24 1c                mov ebp, dword ptr [esp + 0x1c]
+  0006200D  8b cb                      mov ecx, ebx
+  0006200F  55                         push ebp
+  00062010  e8 1b 98 fd ff             call 0x1003b830
+  00062015  8b 4c 24 20                mov ecx, dword ptr [esp + 0x20]
+  00062019  55                         push ebp
+  0006201A  89 8e a4 07 00 00          mov dword ptr [esi + 0x7a4], ecx
+  00062020  8d 8e a8 07 00 00          lea ecx, [esi + 0x7a8]
+  00062026  e8 c5 f4 01 00             call 0x100814f0
+  0006202B  8b 44 24 24                mov eax, dword ptr [esp + 0x24]
+  0006202F  8b 10                      mov edx, dword ptr [eax]
+  00062031  89 96 b4 07 00 00          mov dword ptr [esi + 0x7b4], edx
+  00062037  8b 48 04                   mov ecx, dword ptr [eax + 4]
+  0006203A  89 8e b8 07 00 00          mov dword ptr [esi + 0x7b8], ecx
+  00062040  8b 50 08                   mov edx, dword ptr [eax + 8]
+  00062043  89 96 bc 07 00 00          mov dword ptr [esi + 0x7bc], edx
+  00062049  8b 40 0c                   mov eax, dword ptr [eax + 0xc]
+  0006204C  89 86 c0 07 00 00          mov dword ptr [esi + 0x7c0], eax
+  00062052  8b c7                      mov eax, edi
+  00062054  5f                         pop edi
+  00062055  5e                         pop esi
+  00062056  5d                         pop ebp
+  00062057  5b                         pop ebx
+  00062058  c2 18 00                   ret 0x18
+```
+
+- `fild [esp+0x28]` → `fstp [task+0x74]`: the rounded duration, consumed by a tick body byte-identical to §15.2's
+  hold (`0x62060`, `[0x1047BFA8]+0xEB0` quantum, finish when the remainder drops strictly below zero):
+
+```text
+  00062060  a1 a8 bf 47 10             mov eax, dword ptr [0x1047bfa8]
+  00062065  d9 80 b0 0e 00 00          fld dword ptr [eax + 0xeb0]
+  0006206B  d8 69 74                   fsubr dword ptr [ecx + 0x74]
+  0006206E  d9 51 74                   fst dword ptr [ecx + 0x74]
+  00062071  d8 1d d8 95 32 10          fcomp dword ptr [0x103295d8]
+  00062077  df e0                      fnstsw ax
+  00062079  f6 c4 05                   test ah, 5
+  0006207C  7a 0a                      jp 0x10062088
+  0006207E  8b 11                      mov edx, dword ptr [ecx]
+  00062080  6a 01                      push 1
+  00062082  ff 52 18                   call dword ptr [edx + 0x18]
+  00062085  b0 01                      mov al, 1
+  00062087  c3                         ret 
+  00062088  32 c0                      xor al, al
+  0006208A  c3                         ret
+```
+
+- `mov ecx,[esp+0x20]` then at **`0x6201A`** `mov [actor+0x7A4], ecx` — one authored operand;
+- `lea ecx,[actor+0x7A8] / call 0x100814f0` with the object found by the doll walk → an intrusive list head at
+  `actor+0x7A8`, i.e. the **target** of the action lives there, not in `+0x7A4`;
+- four dwords copied from a pointer argument into `actor+0x7B4..+0x7C0` — an authored vec4 offset.
+
+The undo path is the sibling body at `0x61F50`, which installs the same two vtables, clears the field to `-1` and
+clears the container (`push 0` into `0x814F0`):
+
+```text
+  00061F50  53                         push ebx
+  00061F51  55                         push ebp
+  00061F52  56                         push esi
+  00061F53  57                         push edi
+  00061F54  8b f9                      mov edi, ecx
+  00061F56  8d 77 34                   lea esi, [edi + 0x34]
+  00061F59  c7 07 28 bf 32 10          mov dword ptr [edi], 0x1032bf28
+  00061F5F  8b ce                      mov ecx, esi
+  00061F61  c7 06 0c bf 32 10          mov dword ptr [esi], 0x1032bf0c
+  00061F67  e8 64 97 fd ff             call 0x1003b6d0
+  00061F6C  8b ce                      mov ecx, esi
+  00061F6E  c7 80 a4 07 00 00 ff ff ff ff mov dword ptr [eax + 0x7a4], 0xffffffff
+  00061F78  e8 53 97 fd ff             call 0x1003b6d0
+  00061F7D  6a 00                      push 0
+  00061F7F  8d 88 a8 07 00 00          lea ecx, [eax + 0x7a8]
+  00061F85  e8 66 f5 01 00             call 0x100814f0
+  00061F8A  8b ce                      mov ecx, esi
+  00061F8C  e8 3f 97 fd ff             call 0x1003b6d0
+  00061F91  8b ce                      mov ecx, esi
+  00061F93  8b e8                      mov ebp, eax
+  00061F95  e8 36 97 fd ff             call 0x1003b6d0
+  00061F9A  8b d8                      mov ebx, eax
+```
+
+Field census for `+0x7A4` (`--disp 0x7A4 --size 4`): **9 sites**, all accounted — ctor write, undo body,
+actor-destructor-path write of `-1` at `0xC62D6`, the invalid-target reset at `0xC70E6` (register `ebx` is `-1` there:
+it comes from `or ebx, 0xffffffff` at `0x6F50` in the same block), §16.2's gate compare, and three reads.
+
+The consumer (`0xC6F4A..`, inside the actor update) shows what the field is used for:
+
+```text
+  000C6F4A  8b 86 a4 07 00 00          mov eax, dword ptr [esi + 0x7a4]
+  000C6F50  83 cb ff                   or ebx, 0xffffffff
+  000C6F53  3b c3                      cmp eax, ebx
+  000C6F55  0f 84 91 01 00 00          je 0x100c70ec
+  000C6F5B  8d 8e a8 07 00 00          lea ecx, [esi + 0x7a8]
+  000C6F61  e8 ea a5 fb ff             call 0x10081550
+  000C6F66  8b f8                      mov edi, eax
+  000C6F68  3b f7                      cmp esi, edi
+  000C6F6A  0f 84 76 01 00 00          je 0x100c70e6
+  000C6F70  85 ff                      test edi, edi
+  000C6F72  0f 84 6e 01 00 00          je 0x100c70e6
+  000C6F78  8b 86 a4 07 00 00          mov eax, dword ptr [esi + 0x7a4]
+  000C6F7E  83 f8 30                   cmp eax, 0x30
+  000C6F81  7c 2a                      jl 0x100c6fad
+  000C6F83  83 f8 3d                   cmp eax, 0x3d
+  000C6F86  7d 25                      jge 0x100c6fad
+  000C6F88  6a 00                      push 0
+  000C6F8A  56                         push esi
+  000C6F8B  57                         push edi
+  000C6F8C  8d 54 24 50                lea edx, [esp + 0x50]
+  000C6F90  50                         push eax
+  000C6F91  52                         push edx
+  000C6F92  e8 89 4a f7 ff             call 0x1003ba20
+  000C6F97  8b 07                      mov eax, dword ptr [edi]
+  000C6F99  83 c4 14                   add esp, 0x14
+  000C6F9C  8b cf                      mov ecx, edi
+  000C6F9E  ff 90 bc 01 00 00          call dword ptr [eax + 0x1bc]
+  000C6FA4  8b 48 04                   mov ecx, dword ptr [eax + 4]
+  000C6FA7  89 4c 24 48                mov dword ptr [esp + 0x48], ecx
+  000C6FAB  eb 10                      jmp 0x100c6fbd
+  000C6FAD  8b 17                      mov edx, dword ptr [edi]
+  000C6FAF  8d 4c 24 44                lea ecx, [esp + 0x44]
+  000C6FB3  51                         push ecx
+  000C6FB4  50                         push eax
+  000C6FB5  8b cf                      mov ecx, edi
+  000C6FB7  ff 92 c4 01 00 00          call dword ptr [edx + 0x1c4]
+  000C6FBD  8d 8c 24 ac 00 00 00       lea ecx, [esp + 0xac]
+```
+
+- `actor+0x7A4 == -1` → branch skipped entirely;
+- target from the container's first element; if it resolves to null **or to self**, reset `+0x7A4 = -1` and stop;
+- then a range test on `+0x7A4`: inside `[0x30, 0x3D)` the point comes from a joint accessor (`call 0x3BA20(index,
+  …)`) plus the target's position; otherwise it comes from **vtable slot byte `+0x1C4`** — the attach-point getter
+  §E.12 used for the look-at anchor — called with `[actor+0x7A4]` as the slot number. That is a *slot/joint* index,
+  which is why the range test exists at all, and it is not an actor id.
+- finally the authored offset is rotated by the target's yaw and applied:
+
+```text
+  000C7016  8b 16                      mov edx, dword ptr [esi]
+  000C7018  83 c4 08                   add esp, 8
+  000C701B  8b ce                      mov ecx, esi
+  000C701D  ff 92 bc 01 00 00          call dword ptr [edx + 0x1bc]
+  000C7023  50                         push eax
+  000C7024  8d 44 24 48                lea eax, [esp + 0x48]
+  000C7028  8d 4c 24 1c                lea ecx, [esp + 0x1c]
+  000C702C  50                         push eax
+  000C702D  51                         push ecx
+  000C702E  e8 ed 00 f6 ff             call 0x10027120
+  000C7033  8b 86 a4 07 00 00          mov eax, dword ptr [esi + 0x7a4]
+  000C7039  83 c4 0c                   add esp, 0xc
+  000C703C  83 f8 30                   cmp eax, 0x30
+  000C703F  7c 09                      jl 0x100c704a
+  000C7041  83 f8 3d                   cmp eax, 0x3d
+  000C7044  0f 8c 8e 00 00 00          jl 0x100c70d8
+  000C704A  8b 17                      mov edx, dword ptr [edi]
+  000C704C  8b cf                      mov ecx, edi
+  000C704E  ff 92 c0 01 00 00          call dword ptr [edx + 0x1c0]
+  000C7054  d9 40 04                   fld dword ptr [eax + 4]
+  000C7057  d8 05 98 df 32 10          fadd dword ptr [0x1032df98]
+  000C705D  8b 06                      mov eax, dword ptr [esi]
+  000C705F  8b ce                      mov ecx, esi
+  000C7061  d9 5c 24 14                fstp dword ptr [esp + 0x14]
+  000C7065  ff 90 c0 01 00 00          call dword ptr [eax + 0x1c0]
+  000C706B  8b 4c 24 14                mov ecx, dword ptr [esp + 0x14]
+  000C706F  89 48 04                   mov dword ptr [eax + 4], ecx
+  000C7072  8b 16                      mov edx, dword ptr [esi]
+  000C7074  8b ce                      mov ecx, esi
+  000C7076  ff 92 c0 01 00 00          call dword ptr [edx + 0x1c0]
+  000C707C  d9 40 04                   fld dword ptr [eax + 4]
+  000C707F  d8 1d 30 9d 32 10          fcomp dword ptr [0x10329d30]
+  000C7085  df e0                      fnstsw ax
+  000C7087  25 00 41 00 00             and eax, 0x4100
+  000C708C  75 18                      jne 0x100c70a6
+  000C708E  8b 06                      mov eax, dword ptr [esi]
+  000C7090  8b ce                      mov ecx, esi
+  000C7092  ff 90 c0 01 00 00          call dword ptr [eax + 0x1c0]
+  000C7098  d9 40 04                   fld dword ptr [eax + 4]
+  000C709B  d8 25 2c 9d 32 10          fsub dword ptr [0x10329d2c]
+  000C70A1  83 c0 04                   add eax, 4
+  000C70A4  d9 18                      fstp dword ptr [eax]
+  000C70A6  8b 16                      mov edx, dword ptr [esi]
+  000C70A8  8b ce                      mov ecx, esi
+  000C70AA  ff 92 c0 01 00 00          call dword ptr [edx + 0x1c0]
+  000C70B0  d9 40 04                   fld dword ptr [eax + 4]
+  000C70B3  d8 1d 28 9d 32 10          fcomp dword ptr [0x10329d28]
+  000C70B9  df e0                      fnstsw ax
+  000C70BB  f6 c4 05                   test ah, 5
+  000C70BE  7a 18                      jp 0x100c70d8
+  000C70C0  8b 06                      mov eax, dword ptr [esi]
+  000C70C2  8b ce                      mov ecx, esi
+  000C70C4  ff 90 c0 01 00 00          call dword ptr [eax + 0x1c0]
+  000C70CA  d9 40 04                   fld dword ptr [eax + 4]
+  000C70CD  d8 05 2c 9d 32 10          fadd dword ptr [0x10329d2c]
+  000C70D3  83 c0 04                   add eax, 4
+  000C70D6  d9 18                      fstp dword ptr [eax]
+  000C70D8  8d 8c 24 ac 00 00 00       lea ecx, [esp + 0xac]
+```
+
+…ending in `.y` of self's angle record being written from **target euler `.y` + `[0x1032DF98]`** (`.rdata 0x32DF98`
+= `0x40490FDB` = π exactly), followed by the same two-sided ±3.1415 re-wrap as §16.1's other writers.
+
+Corroboration, tier-2 and deliberately *not* load-bearing: xim parses stage `0x7A` (`EffectRoutineParser.kt:491`) as
+four floats + two floats + a dword it names `targetJoint`, adding an `ActorJumpRoutine(duration, targetJoint)`. That
+matches the operand shape read here (vec4 at `+0x7B4`, slot id at `+0x7A4`, duration at `task+0x74`).
+
+### 16.4 Consequences for kuluu
+
+1. **Honour the airborne gate** with state kuluu already has: an active knockback (the same stage byte) suppresses the
+   scripted-turn step — see kuluu's `tick_actor_rotation_drives` / `step_pending_turns`.
+2. **Do not port stage `0x7A` as a face-target mode.** What is verified is its operand layout, duration law, container,
+   and the orientation rule at its tail; what is *not* verified is how the doll/mount chain picks which object the
+   jump lands on (settling read: `0x100814f0` / `0x10081550` container semantics, and who else writes that list).
+3. **The three angle components are all live** in the world matrix (§16.1), so a routine authoring pitch or roll does
+   tilt an actor in retail. kuluu carries the triple but renders yaw only; whether any shipped routine authors non-zero
+   outer angles is an open data question, and it decides whether that becomes a bug (settling read: census
+   `ActorRotation` stage payloads over the real DAT set).
