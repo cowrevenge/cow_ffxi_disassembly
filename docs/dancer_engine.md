@@ -148,6 +148,45 @@ Byte-verified this session against our `FFXiMain.unpacked.dll` (retail-2026-9, o
   but the per-channel interp-enum read was not pinned to a function; moot for D1 given the negative
   evaluator census above.
 
+### §4a-bis — The blend merge itself: `0x33220` decoded, and the two ways kuluu's differs **[V]** (pass of 2026-10-06)
+
+§4a recorded that per-bone rotation merging goes through an "NLerp-style call (`0x1A5C0` → `0x33220`) …
+no renormalise follows". The callee is now read, and it pins the law:
+
+```
+0x33220  fld dword [esp+0xc]              ; t
+0x33224  fcomp dword [0x1032961c]         ; vs +1.0   (test ah,0x44 -> J10: jnp = equal)
+0x33239  jp 0x3325e                        ; t != 1 -> general path
+0x3323B  ...                               ; t == 1: copy the incoming quat's 4 dwords out verbatim
+0x3325E  dot = sum(a[i]*b[i])              ; fld/fmul x4, faddp x3
+0x3327A  fcomp dword [0x103295d8]          ; vs +0.0   (test ah,5 -> J10: jp = not-below)
+0x33285  jp 0x332ac                         ; dot >= 0: keep b as it is
+0x33287  ...                                ; else negate b's four components (fchs x4) - shortest arc
+0x332C7  fld +1.0; fsub [esp+0x30]          ; 1 - t
+0x332D9  call 0x32a40                        ; (helper, result unused by the arithmetic below)
+0x332DE  out[i] = a[i]*(1-t) + b'[i]*t       ; four components, stored raw at 0x33335..0x33350
+```
+
+**No normalisation exists anywhere in it** — no `fsqrt`, no division: the blended quaternion leaves the
+function with whatever magnitude the weighted sum produced (it only ever runs on quats that clip data and
+prior poses already keep near-unit). The t==1 branch is a whole-quat copy, not a blend.
+
+Two kuluu deviations this exposes, both in the *blend* path (`ffxi-actor/src/animation.rs`, and the shared
+`nlerp` it imports from `ffxi-dat/src/skel_anim.rs:53`):
+
+1. **kuluu renormalises its blends.** `skel_anim::nlerp` divides by the result magnitude; retail's merge does
+   not (bytes above). Same sign-flip-on-negative-dot rule, though — kuluu matches that part ✓.
+2. **kuluu has a long-arc fallback selection** (`long_arc_is_nearer_front` + `nlerp_arc(_, _, true)`, chosen
+   per joint at transition build time; added in `jw-stack-815 64b1a0e3` as the mitigation for ~180° mvl?→mvr?
+   joint rotations, and since superseded by the idle frame-0 waypoint path which xim evidences). Retail's
+   merge has *no* arc choice at all: shortest arc, always. So once kuluu's channel-level work lands, the long-arc
+   arm should go rather than be ported — keeping it means some joints rotate the way round retail never does.
+
+Not verified, and worth naming before anyone "fixes" the wrong thing: the **key-channel** interpolation (adjacent
+keys *within* one clip) is a different routine from this merge; §4a left its interp-enum read [I], so kuluu's
+renormalising `nlerp` on that path has neither retail confirmation nor refutation. Only the blend-merge sites
+have evidence to change by today.
+
 ## 5. Bone hierarchy & skinning — leads for the pose path [web]
 
 - `CMoSkeletonElem::UpdateBoneTransform`: normalize a bone's local Euler rotation (three floats at
