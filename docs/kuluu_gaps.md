@@ -408,21 +408,27 @@ answer against the EventLog index both cursors address the same entry by (`one_m
 and `COMBAT_TRAVEL` now prints once per melee start, which makes a future fork visible as *two* lines again rather
 than a silent disagreement.
 
+**Run 3, same evening — the fork is gone and two spacing mechanisms showed up.** One line per start now (`event=9`), and while D was held with `mvr?` playing:
+
+    COMBAT_TRAVEL actor=1 event=9  vel=(1.43,1.66) bearing=(-0.07,-0.70) bucket=Backward   → swing=atb0
+    COMBAT_TRAVEL actor=1 event=19 vel=(0.00,0.00) bearing=( 0.00, 0.00) bucket=None       → swing=ati1
+
+The first start is ~0.7 yalm from the mob, and its velocity points **radially outward** — so travel reads Backward and `atb0` (the retreat swing) plays *behind* the player instead of toward the target. That is Shane's "wrong flip heading … goes behind" reproduced in one log line, and it is a spacing/parallel-move shape problem, not swing selection. The second start has the attacker–victim bearing collapsed to zero (kuluu walked onto its target), which leaves xim's law with no reference axis at all: every such swing degenerates to a standing `ati?` — "never takes the towards animation", same cause.
+
 **What §G.10's runtime half still does not prove (open [I], named):**
 
-1. **[I] Engaged translation stops near the target, so lateral buckets come from noise.** While D was held and
-   `mvr?` advanced for seconds, self's smoothed velocity read `(0.02, 0.01)` — i.e. ~0 yalm/s. At that magnitude a
-   bucket is decided by float noise (`Direction::None` and `Right` came from the same swing above). Two candidate
-   causes, both kuluu-side: the locked forward allowance / contact gap (`input.rs lock_forward_allowance`,
-   `MODEL_RADIUS_PC + radius + CONTACT_GAP`) and obstacle collision rejecting steps at melee range. Settling step is
-   a per-frame log of the walker's step against `MotionSample` for one engaged strafe hold (kuluu change, not a DLL
-   read), plus the retail question of whether a locked-on player keeps orbiting while strafing — movement.md's
-   target-track M-pass is that citation. Note the authored swings also carry AnimationLock 64-70 frames (§G.10 table),
-   so velocity sampled *during* a swing is legitimately ~0; xim samples when the attack starts, which is what kuluu does.
-2. **[I] The Left/Right mirror question is not settled.** One clean sample agrees (D held → `mvr?` legs and
-   `travel=Right`), but no capture yet pairs a *held A* with a non-degenerate velocity; the `atr0` vs standing fork
-   above, not a mirrored bucket, explains Shane's "goes behind". Next session: hold A across several swings (the
-   memo makes the arm and body agree by construction) and check `travel=Left`/`atl?` against `mvl?`.
+1. **[I] Kuluu closes to ~0.7 yalm (or onto) its target, and that distance wrecks both halves of P6.** Run 3 has
+   the two failure shapes side by side: at |bearing| ≈ 0.7 a locked strafe's velocity is radially outward →
+   `bucket=Backward` → `atb0` swinging behind the player; inside contact |bearing| → 0, so there is no reference axis
+   and every swing takes a standing `ati?`. Candidate causes are kuluu-side and named: the locked forward allowance /
+   contact gap (`input.rs lock_forward_allowance`, `MODEL_RADIUS_PC + radius + CONTACT_GAP`) and obstacle collision at
+   melee range. Settling step: per-frame log of the walker's step against `MotionSample` over one engaged strafe hold
+   (kuluu change, not a DLL read), plus retail's own spacing/orbit law from movement.md's target-track M-pass.
+2. **[I] The Left/Right mirror question is still unsettled — and run 3 says look at Backward first.** D held gave the
+   consistent pair (`mvr?` legs, `travel=Right`) in run 2; run 3's D hold produced `Backward`, i.e. Shane's "goes
+   behind" is currently explained by radial drift rather than a mirrored bucket or the (now fixed) fork. Next capture:
+   hold A and D across several swings *at a fixed, logged distance* once item 1 lands, and check `atl?`/`atr0` against
+   `mvl?`/`mvr?`.
 3. **§G.8 open item 3 has its trigger recorded.** Map log, repeatedly:
    `Invalid GP_CLI_COMMAND_ACTION packet from <char>: Character is not engaged.` — matched client-side by
    `sent 0x01A ACTION action_id=15 kind=ChangeTarget unique_no=<mob id> act_index=<idx>` at zone-in and on each
