@@ -1793,7 +1793,12 @@ matches the operand shape read here (vec4 at `+0x7B4`, slot id at `+0x7A4`, dura
 ### 16.4 Consequences for kuluu
 
 1. **Honour the airborne gate** with state kuluu already has: an active knockback (the same stage byte) suppresses the
-   scripted-turn step — see kuluu's `tick_actor_rotation_drives` / `step_pending_turns`.
+   scripted-turn step — see kuluu's `tick_actor_rotation_drives` / `step_pending_turns`. **Landed 2026-10-06:**
+   kuluu `jw-stack-815 296eace9` adds an `ActorAirborne` component held for the length of a knock-back run
+   (`sync_actor_airborne`, chained after the knock-back tick) and makes `step_pending_turns` skip its step while it is
+   set — pinned by `an_airborne_actor_takes_no_step_of_its_queued_turn`. No gate is applied to the `ActorRotation`
+   drive tick: §13.4 shows that task writing the orientation record itself, with no gate chain recorded in front of
+   it.
 2. **Do not port stage `0x7A` as a face-target mode.** What is verified is its operand layout, duration law, container,
    and the orientation rule at its tail; what is *not* verified is how the doll/mount chain picks which object the
    jump lands on (settling read: `0x100814f0` / `0x10081550` container semantics, and who else writes that list).
