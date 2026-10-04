@@ -306,6 +306,25 @@ No mask check exists inside sampling: every active slot overwrites per bone, so 
 
 Two points §4/§4a only asserted: **bit6 is armed inline after every base-slot sample** (helper 0x19B00 does the same thing wholesale, and both exist), and the call immediately after the quaternion store is `call 0x32A70`, whose body at that RVA — generated dump of RVA 0x32A40..0x32A71 — is a lone `ret`. "No renormalisation follows the merge" is therefore proven *at the site*, not inferred from absence.
 
+### §4d-addendum — kuluu deleted the frame-to-frame carry; measured clip coverage (2026-10-05) **[V] [measured]**
+
+kuluu had been inheriting an unkeyed bone's record forward indefinitely, which contradicts the reset pass above: a rotation written by a *finished* motion could never be washed out. Removed in kuluu `jw-stack-815 6d8f2e46` — `BonePoseScratch::begin_frame` clears every record before sampling and `sample_joint` writes each bone unconditionally; the crossfade rule that a side which does not key a bone contributes nothing (sampler RVA 0x1B230) stays, because blending an absent channel against bind was what faded weapons out of hands.
+
+Measured on shipped data (`zz-anim-cov`, hume_m skeleton 7072 + its motion block 9672), which is why the carry read as *upper body stuck, legs fine*:
+
+| clip | joints keyed | spine/chest/neck = 49 / 50 / 51? |
+|---|---|---|
+| `idl0` | 10 — `2,25,27..30,33..36` | no |
+| `wlk0` / `run0` / `btl0` | 11–12 (the same lower set) | no |
+| `wlk1` | 45 | yes |
+| `run1` | 40 | yes |
+| `btl1` | 36 | yes |
+| `idl1` | **absent** — hume_m authors no upper-body idle clip at all | — |
+
+For a standing PC nobody keys spine/chest/neck, so after any battle motion finished, its torso twist was the only thing left writing those bones. With the reset pass restored they return to kuluu's default (the joint's bind data in `update_joint`), as retail's frame does.
+
+**Open `[I]` on this row:** who fills the reset-pass defaults — globals `[0x10456d2c..0x10456d38]` (quaternion) and `[0x10456d3c]` (vec3). kuluu's fallback is bind; whether retail's globals are per-actor bind transforms or one shared rest set needs a write census on those two addresses (`--disp 0x10456d2c --size 4`, `--disp 0x10456d3c --size 4`) before any non-bind default is claimed.
+
 ## 4e. What ApplyPolicy and its handlers do: one mask bit, then per-bone key-frame blending **[V]**
 
 Transcribed in full (`d1_apply_policy.asm`, `d1_policy_h0_full.asm`, `d1_policy_h1_full.asm`). Body RVA 0x19A50..0x19AFD (`ret 0x10`):
