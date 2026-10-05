@@ -435,3 +435,49 @@ The first start is ~0.7 yalm from the mob, and its velocity points **radially ou
    retarget. Kuluu sends ChangeTarget while unengaged; LSB's validator (`c2s/0x01a_action.cpp`) only permits it in
    engagement (see §G.8 for the AttackOff pairing). Fix shape is kuluu-side — suppress the send unless engaged — and
    its own row when action dispatch is worked on.
+
+### G.12 P6 weapon-anchor half — which combat motion DATs get loaded is itself a law, and it is now landed (2026-10-06)
+
+Shane's reopened symptom: *"during strafe/engage the weapon needs to properly bind to the anchor bone for all
+weapons."* A held weapon has no transform of its own — every vertex of its `skel_mesh` binds to one skeleton joint, and
+kuluu measures exactly one such joint per main-hand model (Hume M slot 6, models 1/2/4/5/9/10/11/12/13 → joints
+3/10/5/5/6/15/13/13/8). Those anchors author **no bind pose of their own**, so an anchor with no authored writer this
+frame stands wherever its parent chain happens to be: that is the float, and it is why the fix cannot be per-weapon.
+
+**The load law (kuluu `7b8421aa` + `bf4cc084`).** Four `FFXiMain.dll` tables pick the DATs a PC loads for combat —
+race battle base, dual-wield main hand, dual-wield off hand, and the waist/cloth skirt pair held at an odd half-word of
+a stride-4 table (`index*4 + 2`) — each offset by the hand's own CIB animation byte (research/xim MainDll.kt
+getBaseBattleAnimationIndex / getBaseDualWieldMainHandAnimationIndex / getBaseDualWieldOffHandAnimationIndex /
+getBaseSkirtAnimationIndex, consumed by poc/Model.kt PcModel). Measured for Hume M: **9672** race base, **40815** dw main,
+**40431** dw off, **9928** skirt (= 9672+256), **41071** skirt-dw (= 40815+256). kuluu loaded only `race base + main-hand
+byte`; the pairing's own blocks were never in the set, which is why an equipped dagger (model 2, anchor joint 10) had
+**zero** authored writers while engaged and now has four. Pinned per model by
+`weapon_anchor_writers_follow_the_battle_motion_block_law` (anchor joint + loaded-clip writer count), table values and
+arithmetic pinned in `combat_stance.rs`.
+
+**Keyed-ness is uneven per block `[measured]`:** of the race battle block family, only offsets **+6/+7** key the whole
+anchor set `[5,8,10,13,15,17,19,22]`, `+1` keys `[13,15,17]`, and every other offset keys none of it; all files key
+`[2,27]` in `btl0`; the dual-wield main block keys the whole set at **every** offset. So for most weapon types there is no
+authored battle-stance writer on their own anchor — see the open item below before concluding either way.
+
+**Animation-mode stages ship and are parsed (kuluu `7b8421aa`).** Re-measured through the new parser over the whole
+install: opcodes **0x79=670 / 0x8C=684 / 0xA4=468 / 0xA5=470**, all decoded as `StageKind::AnimationMode`, variant domain
+exactly **{0,1,2,3}** (Battle/Idle/Walking/Running × variant). Producers are NPC/mob routines named `ids0..ids2`; none of the
+sampled PC race battle blocks or weapon model DATs fires one, so nothing currently switches a player's family. The
+switch feeds `ActorAnimInputs::{battle,idle,walking,running}_mode` → `animation_mode_variant`, which already preferred the
+variant id and fell back to the unmarked family.
+
+**Negative result worth having: weapon model DATs carry no motion at all.** Chunk inventory of main-hand 8394 (`dat-chunk-kinds`):
+`rhm_`(0x01), five 0x07 sound/effect chunks, `hf_k` texture (0x20), one skel mesh `wep0` (0x2A), four 0x3D, `info` (0x45) — no
+mo2/animation chunk. An anchor can therefore only ever be keyed by race/battle motion blocks; "load the weapon DAT's own
+anim dir" is dead as a hypothesis.
+
+**Open `[I]` on this row — named closers, and P6 stays open until the first one lands:**
+
+1. **Is a pose-scratch record an absolute local, or a delta multiplied onto persistent node state?** Now the single
+   blocker for "does an unkeyed anchor keep last frame's transform". Settling read recorded in [dancer_engine.md §4d](dancer_engine.md):
+   the reset defaults are one process-wide neutral record (identity quat written once at `@0x1A438`/`0x32A50`, translation zero with no writer), and the
+   mo2-entry walk at `@0x34B80` building the stride-64 scratch `0x1045F058` decides whether unkeyed bones hold or collapse.
+   Until then neither kuluu's bind fallback nor a re-landed `carry_unkeyed_channels` is defensible — see §5b for why both have been in and out.
+2. **Where does retail source a sub-slot weapon's animation type?** Every Hume M slot-7 model's CIB animation byte reads
+   `0xFF` (unset) on this install, so xim's `isDualWield` predicate never fires from model data — yet the dual-wield blocks are the ones that key every anchor. Read the caller that fills that byte (`ffxi-dat/src/cib.rs::motion_index` is only the file's own copy).
