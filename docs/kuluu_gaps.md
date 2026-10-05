@@ -481,3 +481,21 @@ anim dir" is dead as a hypothesis.
    Until then neither kuluu's bind fallback nor a re-landed `carry_unkeyed_channels` is defensible — see §5b for why both have been in and out.
 2. **Where does retail source a sub-slot weapon's animation type?** Every Hume M slot-7 model's CIB animation byte reads
    `0xFF` (unset) on this install, so xim's `isDualWield` predicate never fires from model data — yet the dual-wield blocks are the ones that key every anchor. Read the caller that fills that byte (`ffxi-dat/src/cib.rs::motion_index` is only the file's own copy).
+
+**The hand-swap mechanism, measured (2026-10-06 second pass) — this is what rows P3/P6 have been pointing at.**
+A dagger (Hume M slot-6 model 2) binds every vertex to joint **10** at weight 1.0 with no second skin joint in use, and
+joint 10 authors **zero offset**; its chain is `2 -> 9 -> 10` where joint 9's authored local `[0.0, 1.052848, 0.04654]`
+is the chain's only reach. No clip in the loaded pool writes joint 10 directly (measured writers: **0**), so a held
+weapon is positioned *only* by motion that keys its attach parent — and the id families split that work across two
+parallel chains: `btl1/mvl1/wlk1/aml1…` key joint **9** (the chain that holds the dagger), while `btl0/mvl0/wlk0…` key
+joint **2** and never touch 9. Pinned by kuluu `held_weapons_follow_an_attach_chain_that_the_clip_id_selects`.
+
+Consequence, and it supersedes my earlier "uneven keyed-ness" framing: `pose_clip_matches` registers **every** member of
+a parameterized family, so an actor runs both variants simultaneously — one layer driving the chain that carries the
+weapon, another driving a chain that does not. That is the first-strafe-step hand swap, and it explains why selecting the
+right motion *blocks* changed nothing (both variants were already loaded). The open question is now narrow and specific:
+**which hold variant retail keeps live for an actor, and what selects it** — the last character of every id (`0`/`1`, plus
+`2` in the waist/cloth blocks) indexes an attach chain, so a per-actor choice, not a per-block load. Named reads/kuluu
+changes that close P3/P6-anchor: (i) determine retail's selector for the id variant (equipment-driven? the animation-mode
+stages 0x79/0x8C/A4/A5 variants measured in this file are the obvious candidate and are already parsed); (ii) make kuluu resolve
+a parameterized family to one member instead of registering all of them.
