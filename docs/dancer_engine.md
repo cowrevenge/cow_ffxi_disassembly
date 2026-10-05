@@ -323,7 +323,15 @@ Measured on shipped data (`zz-anim-cov`, hume_m skeleton 7072 + its motion block
 
 For a standing PC nobody keys spine/chest/neck, so after any battle motion finished, its torso twist was the only thing left writing those bones. With the reset pass restored they return to kuluu's default (the joint's bind data in `update_joint`), as retail's frame does.
 
-**Open `[I]` on this row:** who fills the reset-pass defaults — globals `[0x10456d2c..0x10456d38]` (quaternion) and `[0x10456d3c]` (vec3). kuluu's fallback is bind; whether retail's globals are per-actor bind transforms or one shared rest set needs a write census on those two addresses (`--disp 0x10456d2c --size 4`, `--disp 0x10456d3c --size 4`) before any non-bind default is claimed.
+**Open `[I]` on this row: RESOLVED for the defaults themselves (pass of 2026-10-06, capstone sweep of `.text` 0x1000..0x328000 over `C:/tmp/ffximain_work/FFXiMain.unpacked.dll`).** The whole block `[0x10456D20..0x10456D48]` has **16 memory sites in the entire module**, and not one of them stores a per-actor value into `[0x10456D2C..+0x38]` or `[0x10456D3C]`. What exists instead:
+
+- `@0x1A438 mov ecx, offset 0x10456d2c` + `@0x1A446 call 0x10032a40` → `0x32A40` tail-calls `0x32A50`, whose whole body is `[ecx+0xC]=0x3F800000`, `[ecx..+8]=0`: **an identity quaternion written into the default record**, once, behind the flag at `[0x10456D28]` (read `@0x1A423`, set `@0x1A440`).
+- The vec3 default `[0x10456D3C]` has **no writer anywhere in `.text`**; its section-initial bytes are zero, so the translation default is a literal `(0,0,0)`.
+- The neighbours are unrelated storage: `[0x10456D20]` is an `inc`/load pair (`@0x186D8`, `@0x18874`, `@0x18992`) and `[0x10456D24]` a counter written three times in one function (`@0x19147`, `@0x19181`, `@0x19193`).
+
+So the reset pass stamps **one process-wide neutral record — identity quaternion, zero translation — onto every bone, every frame**, not a per-actor bind set. That is decisive against any claim that retail's default is the skeleton's rest pose: kuluu falls back to `joint.translation`/`bind_rotation(joint)` (`ffxi-actor/src/skeleton_instance.rs::update_joint`) where retail writes *nothing* for the bone.
+
+**What it does not settle, and now decides play-test P6.** A neutral record is only meaningful two ways: either each frame's node matrices are rebuilt from these records absolutely (in which case an unkeyed bone visibly collapses toward its parent, and every bone that must hold a pose has to be keyed), or the record is multiplied onto persistent node state (in which case it is a do-nothing delta and §5b's persistence holds). The stride-64 node working set at `0x1045F058`, built by the mo2-entry walk starting `@0x34B80` (`mov ax,[edx+0x32]` = entry count, entries at +0x3A stride 0x54, `shl edi,6` per node), is where that branches; reading whether a node store happens unconditionally or only for entries with a channel present closes both this row and the P6 weapon-anchor half.
 
 ## 4e. What ApplyPolicy and its handlers do: one mask bit, then per-bone key-frame blending **[V]**
 
@@ -375,10 +383,13 @@ at 0x2B018), converts it to a quaternion (call 0x32E70 at 0x2B021) and multiplie
 only access to a node is read → multiply → store into another table is coherent only if that transform survives from
 frame to frame; nothing here rebuilds it from the bind pose, and the override entries are likewise read-modify-written.
 
-**Kuluu consequence (landed `476ea336`).** A joint no active clip keys must keep its previous local transform. kuluu's
-pose pass re-derived every unkeyed joint from bind each frame, so a sparse clip — turn-in-place while engaged resolves
-from the battle set first — pulled an equipped weapon back to its bind position (play-test row P3). `carry_unkeyed_channels`
-(ffxi-actor/src/skeleton_instance.rs) is that memory, cleared with the coordinator on a pose-state reset.
+**Kuluu consequence: landed and then removed.** `476ea336` added `carry_unkeyed_channels` (ffxi-actor/src/skeleton_instance.rs)
+to keep an unkeyed joint's last local transform, because a sparse battle clip pulled an equipped weapon back to bind
+(play-test row P3). It was deleted four commits later by kuluu `jw-stack-815 6d8f2e46`, which restored §4d's reset pass
+after measuring that hume_m authors no upper-body idle clip at all — carrying records absolutely left a finished battle
+clip's torso twist as the only writer of spine/chest/neck forever. Both halves are in the tree's history; the way they
+can coexist is exactly the unresolved question closed onto §4d above (neutral record = do-nothing delta vs absolute
+local), so neither `carry` nor bind-fallback should be re-landed before that read.
 
 Tier: **[V] for every byte above**; "persists frame-to-frame" is the reading those bytes force rather than an
 independently observed initialisation. If anyone needs it nailed harder, the settling read is whoever allocates and seeds
