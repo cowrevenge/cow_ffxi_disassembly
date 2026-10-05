@@ -607,7 +607,13 @@ The same sweep bounds §G.12's pelvis finding: weapon handles are children of jo
 
 **Open after this pass, with the thing that closes each:**
 
-1. **Does retail actually show the pelvis ±45° on a locked strafe?** Still `[I]`, still the body-flip complaint. Closer: live observation of locked strafing against the installed client (`retail-observe`), or the mask array `0x1045F028` producer (§D1 leftover). No blending change should be attempted before one lands.
+1. **Does retail actually show the pelvis ±45° on a locked strafe?** Still `[I]`, still the body-flip complaint (Shane, play-test after the weapon fix landed: *"the upper body IS STILL rotating backwards in strafe — it should rotate towards the target"*).
+
+   **Two theories for that row are now dead by census `[V]`, so nobody rebuilds them:** sweeping every clip kuluu loads for Hume M, **91 clips key joint 2 and exactly two of them rotate it** — `mvl0` at a constant +45° about DAT −Y and `mvr0` the mirror (`f0 == f6`, not animated). No digit‑1, digit‑2 or battle-family clip rotates the pelvis at all, so:
+   - a *counter*-rotation is not authored anywhere → adding one in kuluu would be inventing retail data (the obvious fix, and wrong);
+   - "the third simultaneous layer cancels it" is false for every family shipped.
+
+   What that leaves, in order of cost: **(a)** does retail even *select* `mvl?/mvr?` for an engaged player, or does its classification land on `run?/mvb?` — i.e. the kuluu-side predicate rather than the pose law (cheapest; readable from xim's thresholds against a live locked strafe); **(b)** whether joint 2's authored +Y is being mapped to kuluu's pose-space yaw with the same chirality retail uses (pose-space caveat recorded below, do NOT measure this with bone-local X azimuth — degenerate; use hand/foot positions instead); **(c)** still-masked retail observation of locked strafing (`retail-observe`) for whether a ~45° torso angle is real. No blending change and no new counter-rotation until one of these lands.
 2. **NPC/mob weapon handles are not implemented.** xim returns no overrides for non-PC models, so kuluu matching that is probably right — but it has never been checked against a mob wielding something. Closer: retail observation of an armed NPC (weapon DATs without PC Info) rather than assuming.
 3. ~~Multi-race confirmation~~ **DONE same pass** (kuluu `c15276ba`, table above). What it left open instead: the byte→joint *table* is still Hume-M-pinned only, and Elvaan-male's weapon chains attach to joints never recorded anywhere. Closer: pin the table per race from a data dump (data-only).
 4. **A two-handed / sub-slot pairing has never been posed end-to-end**, only resolved to handle/hand pairs. Closer: a pose-level pin like the dagger one for `0x78`-class models plus a shield/off-hand pair.
