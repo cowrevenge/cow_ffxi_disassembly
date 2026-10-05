@@ -589,6 +589,17 @@ Measured skeleton parent chains (Hume M): joints **3, 4, 6, 7, 9, 11, 12, 14, 16
 `every_held_weapon_mesh_hangs_off_the_joint_its_info_byte_names` (byte→joint table asserted against the live reference table + ancestor-chain containment sweep over slot-6 models 0..24, pinning its own exception set).
 The dagger's anchor joint is read out of the model DAT (`load_hume_m_with_dagger`), never assumed as `handle + 1`.
 
+**Cross-race confirmation of the law (kuluu `c15276ba`) `[V]`.** The byte→joint table above is Hume M only, so slot-6 models 0..47 were swept over all eight look races (HumeM=1..Galka=8), resolving each model's Info standard-joint through *that race's* reference table and checking it against the ancestor chain of the bones its `skel_mesh` binds: **352 weapon meshes**, containment holds everywhere except a pinned escape set —
+
+| race | escapes measured |
+|---|---|
+| 1 Hume M, 2 Hume F, 5, 6 (Taru), 8 Galka | model id **18** |
+| 3 Elvaan M | model id 18 — and that one binds the **root** bone |
+| 4 Elvaan F | model ids **1** (binds root) and **18** |
+| **7 Mithra** (the rig Shane tests) | **none** |
+
+The same sweep bounds §G.12's pelvis finding: weapon handles are children of joint 2 on races 1,2,4,5,6,7,8 but on **Elvaan-male not one of its 44 weapon handles hangs under joint 2**. So "every weapon chain inherits the strafe pelvis swing" is a Hume-class fact. It does not by itself disprove joint 2 being the hip on Elvaan — only that its weapon chains attach somewhere else, which was not measured — but kuluu's `HIP_JOINT = 2` (`ffxi-actor/src/skeleton_instance.rs:30`) asserts *"every FFXI skeleton files third"* for mount attach and has never been checked per race. Closer for both, data-only: dump joint roles + parent chains per race skeleton against the reference table.
+
 **Two measurements that constrain the next step, both `[V]`:**
 
 - **Sub-slot models name a handle even though their animation byte is unset.** Every Hume M slot-7 model with an Info record carries standard-joint `0x7d` → joint 24, while its `motion_index` reads `0xFF` on all of them (ids 19, 20, 22 carry no standard-joint at all). So xim's `isDualWield` predicate cannot be sourced from that byte — §G.12 open item 2 stays open, and this narrows it: whatever fills the sub animation type must be readable independently of Info.
@@ -598,5 +609,5 @@ The dagger's anchor joint is read out of the model DAT (`load_hume_m_with_dagger
 
 1. **Does retail actually show the pelvis ±45° on a locked strafe?** Still `[I]`, still the body-flip complaint. Closer: live observation of locked strafing against the installed client (`retail-observe`), or the mask array `0x1045F028` producer (§D1 leftover). No blending change should be attempted before one lands.
 2. **NPC/mob weapon handles are not implemented.** xim returns no overrides for non-PC models, so kuluu matching that is probably right — but it has never been checked against a mob wielding something. Closer: retail observation of an armed NPC (weapon DATs without PC Info) rather than assuming.
-3. **Multi-race confirmation.** The table above is Hume M only. Closer: re-run the containment sweep per race skeleton (`every_held_weapon_mesh_hangs_off_the_joint_its_info_byte_names` generalized over races) — cheap and data-only.
+3. ~~Multi-race confirmation~~ **DONE same pass** (kuluu `c15276ba`, table above). What it left open instead: the byte→joint *table* is still Hume-M-pinned only, and Elvaan-male's weapon chains attach to joints never recorded anywhere. Closer: pin the table per race from a data dump (data-only).
 4. **A two-handed / sub-slot pairing has never been posed end-to-end**, only resolved to handle/hand pairs. Closer: a pose-level pin like the dagger one for `0x78`-class models plus a shield/off-hand pair.
