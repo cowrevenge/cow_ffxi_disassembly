@@ -1,12 +1,26 @@
-# cow_ffxi_disassembly
+# FFXI client research vault (FFXiMain.dll)
+
+The full disassembly/reverse-engineering corpus for the retail build. Map of every
+folder and what lives where: **[START_HERE.txt](START_HERE.txt)** — read that first.
 
 Research on the retail **FINAL FANTASY XI** client (`FFXiMain.dll`): static
 disassembly passes extracting how the real client drives movement, camera,
 animation, target tracking, cutscene events, and UI — so the kuluu remake can
 be brought to retail parity ("retail is king, dll is king").
 
-Start with [summary.md](summary.md): the cross-pass synthesis (what is
-verified, what is believed, what is still open).
+Start with [Disassembly_Docs/summary.md](Disassembly_Docs/summary.md): the cross-pass
+synthesis (what is verified, what is believed, what is still open).
+
+## Layout (2026-10-08 reorg)
+
+| Folder | Contents |
+|---|---|
+| `Disassembly_Docs/` | All DLL/DAT research docs: pass docs (movement, camera, joint…), the event/cutscene (`cs_docs/`) and dated round-report (`reports/`) subfolders |
+| `Disassembly_Tools/` | Python scanners over the DLL + DATs (canonical suite), `census/`, `probes/`, `artifacts/`, `.cache/` |
+| `General_Tools/` | Non-DLL tooling: texture/mesh converters, zone-map tools, vendor data, Ashita module examples |
+| `Headless/` | Headless test-bed docs + the stage-texture HD test script (drives `Extracted_Dats/`) |
+| `Extracted_Dats/` | 18 GB local DAT extraction — **never committed**, see `.gitignore` |
+| `General_Docs/` | Non-DLL working documents (tool inventory etc.) |
 
 ## Target binary
 
@@ -43,42 +57,42 @@ Two builds were dissected (RVAs are **build-specific**):
 - **Byte re-read rule (from the M17/M20 incident, 2026-10-02):** every numeric
   claim gets a byte re-read in the build it is claimed for before it lands in a
   doc. Values inherited from XIClient or an earlier build are [web]/[I] until
-  re-read. The session_out/ zips make this cheap — use them.
+  re-read. The artifact zip under `Disassembly_Tools/artifacts/` makes this cheap — use them.
 
 ## Binary facts (TDS 0x6A995428)
 
 - **No RTTI** — compiled with /GR-; the only typeinfo-ish strings are CRT
   exception names. The CXi*/CYy*/CMo* class names exist as allocator/debug tag
-  strings only (113 extracted: `session_out/ffximain_tables_v0.zip`,
+  strings only (113 extracted: `Disassembly_Tools/artifacts/ffximain_tables_v0.zip`,
   `tables_classnames.csv`).
 - **Packer** — the POL1 LZSS above, independently re-derived from the entry
   stub (flag byte MSB-first, 12-bit offset / 4-bit len+3, off==0 ends) and
-  matched to `common.py`. The static unpacker (`session_out/` `unpack.py`)
+  matched to `common.py`. The static unpacker (`Disassembly_Tools/artifacts/ffximain_tables_v0.zip` (contains `unpack.py`))
   produces `FFXiMain.unpacked.dll` (raw==virtual, real OEP 0x31672F), which
   loads into any tool without POL1 handling.
 - **Leaked source paths** (96, `tables_src_paths.txt`): 89 dancer engine
   (`C:\dev\dancer\modules\sq*`) = C engine layer, 5 FFXi_Win game code
   (`D:\build0001\FFXi_Win\`) = C++ game layer, 2 pol.
 
-## Passes (docs/)
+## Passes (Disassembly_Docs/)
 
 | Pass | Doc | Subject |
 |---|---|---|
-| M | [docs/movement.md](docs/movement.md) | The local-player walker: circle-walk, speed law, facing, Q/E, camera re-anchor |
-| C | [docs/camera.md](docs/camera.md) | Event camera control: camera manager, look-at basis, DEFCAMERA |
-| F | [docs/mob_animation.md](docs/mob_animation.md) | The animation driver: 0x0E/0x28 → RenderFlags → actor → routine → stage stream |
-| T | [docs/target_track.md](docs/target_track.md) | Target acquisition and target-track steering |
-| J | [docs/joint.md](docs/joint.md) | The skeleton joint layer: per-joint velocity-curve integrator |
-| D | [docs/drivetask.md](docs/drivetask.md) | The **DriveTask** overlay layer (`CMoLockLookAtDriveTask`, `CMoActorRotationDriveTask`): how an actor is *driven* to look/turn, plus the `dancer` module map and Square's class-descriptor format |
-| E | [docs/event_vm.md](docs/event_vm.md) | The cutscene event VM (opcodes, waits, camera/UI interplay) |
-| U | [docs/ui.md](docs/ui.md) | Event UI/HUD and dialog control |
+| M | [docs/movement.md](Disassembly_Docs/movement.md) | The local-player walker: circle-walk, speed law, facing, Q/E, camera re-anchor |
+| C | [docs/camera.md](Disassembly_Docs/camera.md) | Event camera control: camera manager, look-at basis, DEFCAMERA |
+| F | [docs/mob_animation.md](Disassembly_Docs/mob_animation.md) | The animation driver: 0x0E/0x28 → RenderFlags → actor → routine → stage stream |
+| T | [docs/target_track.md](Disassembly_Docs/target_track.md) | Target acquisition and target-track steering |
+| J | [docs/joint.md](Disassembly_Docs/joint.md) | The skeleton joint layer: per-joint velocity-curve integrator |
+| D | [docs/drivetask.md](Disassembly_Docs/drivetask.md) | The **DriveTask** overlay layer (`CMoLockLookAtDriveTask`, `CMoActorRotationDriveTask`): how an actor is *driven* to look/turn, plus the `dancer` module map and Square's class-descriptor format |
+| E | [docs/event_vm.md](Disassembly_Docs/event_vm.md) | The cutscene event VM (opcodes, waits, camera/UI interplay) |
+| U | [docs/ui.md](Disassembly_Docs/ui.md) | Event UI/HUD and dialog control |
 
-| — | [docs/dancer_engine.md](docs/dancer_engine.md) | **External ingest** (tier `[web]`): WGINC/DancingMad @ 4243c7e — the `dancer` module census, class map and pose/skinning leads, each tagged with whether we verified it in our build; plus our oracle list (PS2 DWARF etc.) |
+| — | [docs/dancer_engine.md](Disassembly_Docs/dancer_engine.md) | **External ingest** (tier `[web]`): WGINC/DancingMad @ 4243c7e — the `dancer` module census, class map and pose/skinning leads, each tagged with whether we verified it in our build; plus our oracle list (PS2 DWARF etc.) |
 
-Supporting material: [event_evidence.md](docs/event_evidence.md) (raw evidence
-dumps for the E pass), [event_opcode_table.md](docs/event_opcode_table.md),
-[mob_evidence_1..3](docs/mob_evidence_1_modmap_anchors.md) (F-pass evidence),
-[tpc_package_table.md](docs/tpc_package_table.md).
+Supporting material: [event_evidence.md](Disassembly_Docs/event_evidence.md) (raw evidence
+dumps for the E pass), [event_opcode_table.md](Disassembly_Docs/event_opcode_table.md),
+[mob_evidence_1..3](Disassembly_Docs/mob_evidence_1_modmap_anchors.md) (F-pass evidence),
+[tpc_package_table.md](Disassembly_Docs/tpc_package_table.md).
 
 ## Tools
 
@@ -96,20 +110,21 @@ Requires: `pip install pefile capstone`.
 - `dat_routines.py`, `ffxi_dat_find.py`, `scene_dat_parse.py`,
   `probe_tpc_files.py`, `assemble_event_evidence.py` — model/scene DAT and
   TPC package tooling.
-- `tools/mask_census.py` — census of the `fnstsw ax` → `test ah,imm8` idioms over `.text`
-  (the x87 flag-test ground truth used by [docs/joint.md](docs/joint.md) §8a).
-- `tools/rtti_graph.py`, `tools/find_vtbl2.py` — parse Square's class descriptors
+- `Disassembly_Tools/census/mask_census.py` — census of the `fnstsw ax` → `test ah,imm8` idioms over `.text`
+  (the x87 flag-test ground truth used by [docs/joint.md](Disassembly_Docs/joint.md) §8a).
+- `Disassembly_Tools/census/rtti_graph.py`, `Disassembly_Tools/census/find_vtbl2.py` — parse Square's class descriptors
   (`{name,size,parent}`) and locate a class's vtables via its RTTI accessor thunk.
-- `tools/dt_consts2.py`, `tools/who_makes_tasks.py` — constant/sink scan over a code range and
+- `Disassembly_Tools/census/dt_consts2.py`, `Disassembly_Tools/census/who_makes_tasks.py` — constant/sink scan over a code range and
   group of `.text` references to a table range (the D pass evidence).
-- `tools/srcpaths2.py`, `tools/our_modules.py` — dump / tally the embedded `C:\dev\dancer\…`
+- `Disassembly_Tools/census/srcpaths2.py`, `Disassembly_Tools/census/our_modules.py` — dump / tally the embedded `C:\dev\dancer\…`
   build paths (our own module census: 16 modules, 84 source-file paths).
-- `tools/xcheck_dmad.py` — check that a list of class names exists in our descriptor table
+- `Disassembly_Tools/census/xcheck_dmad.py` — check that a list of class names exists in our descriptor table
   (used to verify every DancingMad name before repeating it).
 - **Gotcha for any new scanner:** in this unpacked image *file offset == RVA*; do not add
   ImageBase when indexing the buffer, and always disassemble with `skipdata=True`.
-- `session_out/` — the 2026-10-02 cloud-session artifact zips (ffximain_tables_v0,
-  ffximain_claims_v1, ffximain_headless_v1): unpacker + tables, claims CSV +
+- `Disassembly_Tools/artifacts/` — the 2026-10-02 cloud-session artifact zip
+  (`ffximain_tables_v0.zip`; the claims/headless zips named in older docs are not
+  in this local copy): unpacker + tables, claims CSV +
   corrections, labels/functions/decomp for the current build. Inputs to the
   passes — vendored, never regenerated.
 
@@ -120,5 +135,10 @@ Requires: `pip install pefile capstone`.
 - `__pycache__/` and the sweep pickle cache (`.cache/`) — regenerable.
 - Local raw dumps the docs reference (`out3/*`, `out4/d_*.md`,
   `research/XiEvents/...`) — those stay local.
+- The old `legacy_ffxi_disasm/` snapshot of the tool suite (Sep 8 – early Oct) and its
+  run outputs — deleted locally 2026-10-08 as superseded garbage; it was never committed.
+- `General_Tools/ashita_module_examples/{xiui,bovineFH,bovineBattle}/` — local clones of
+  their own repos (`CowXIUI`, `bovinefh`, `bovinebattle`); gitignored so this vault does not
+  fork them. The rest of the examples (plain dirs + zips) are committed.
 - Note: the docs quote local install paths (e.g. `C:\PhoenixXI\...`) in
   prose; they are machine references, not secrets.

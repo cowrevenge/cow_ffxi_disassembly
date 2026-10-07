@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 *.pkl
 out*/
+Extracted_Dats/
+
+# Local clones of separate repos, vendored under the examples folder (START_HERE says to
+# leave their inner .git dirs alone). Each has its own GitHub remote, so they are never
+# embedded in this vault: committing them would create phantom submodule entries.
+General_Tools/ashita_module_examples/xiui/
+General_Tools/ashita_module_examples/bovineFH/
+General_Tools/ashita_module_examples/bovineBattle/

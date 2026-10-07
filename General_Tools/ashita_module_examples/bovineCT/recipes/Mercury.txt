@@ -1,0 +1,4 @@
+# bovinect recipe file
+name: Mercury
+crystal: Lightng. Crystal
+Cobalt Jellyfish, 4

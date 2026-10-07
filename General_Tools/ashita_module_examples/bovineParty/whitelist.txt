@@ -1,0 +1,5 @@
+# bovineparty whitelist
+# One name per line. Lines starting with '#' are comments. Case-insensitive.
+# Edit and run /bovineparty reload to apply changes without restarting.
+
+ 

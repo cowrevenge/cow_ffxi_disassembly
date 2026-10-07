@@ -1,0 +1,6 @@
+# bovinect recipe file
+name: Echo Drops
+crystal: Water Crystal
+Sage, 1
+Honey, 1
+Distilled Water, 1

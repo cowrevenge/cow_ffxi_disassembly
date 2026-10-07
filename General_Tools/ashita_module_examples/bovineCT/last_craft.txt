@@ -1,0 +1,5 @@
+# bovinect recipe file
+name: Tsurara
+crystal: Ice Crystal
+Rock Salt, 1
+Distilled Water, 2

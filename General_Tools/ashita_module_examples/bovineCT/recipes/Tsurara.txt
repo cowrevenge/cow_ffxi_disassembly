@@ -1,0 +1,13 @@
+# bovinect recipe file
+# format:
+#   name: <recipe name>
+#   crystal: <crystal item name>
+#   <ingredient name>, <qty>      ( qty optional, defaults to 1 )
+# lines starting with # are comments; blank lines ignored.
+# item names must match the in-game name (case-insensitive); the addon
+# resolves the item id and inventory slots by name at craft time.
+
+name: Tsurara
+crystal: Ice Crystal
+Rock Salt, 1
+Distilled Water, 2

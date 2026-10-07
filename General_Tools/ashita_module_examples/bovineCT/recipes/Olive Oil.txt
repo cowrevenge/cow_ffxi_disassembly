@@ -1,0 +1,6 @@
+# bovinect recipe file
+name: Olive Oil
+crystal: Wind Crystal
+Sage, 1
+Chamomile, 1
+Olive Oil, 1

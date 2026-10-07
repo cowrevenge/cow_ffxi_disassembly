@@ -1,0 +1,5 @@
+# bovinect recipe file
+name: Silent Oil
+crystal: Water Crystal
+Slime Oil, 1
+Beeswax, 2

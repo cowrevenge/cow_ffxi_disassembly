@@ -1,0 +1,5 @@
+# bovinect recipe file
+name: Prism Powder
+crystal: Light Crystal
+Glass Fiber, 2
+Artificial Lens, 1

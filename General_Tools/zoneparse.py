@@ -1,0 +1,247 @@
+import struct, math
+from collections import Counter, defaultdict
+
+KEY_TABLE_1 = bytes([
+0xE2,0xE5,0x06,0xA9,0xED,0x26,0xF4,0x42,0x15,0xF4,0x81,0x7F,0xDE,0x9A,0xDE,0xD0,
+0x1A,0x98,0x20,0x91,0x39,0x49,0x48,0xA4,0x0A,0x9F,0x40,0x69,0xEC,0xBD,0x81,0x81,
+0x8D,0xAD,0x10,0xB8,0xC1,0x88,0x15,0x05,0x11,0xB1,0xAA,0xF0,0x0F,0x1E,0x34,0xE6,
+0x81,0xAA,0xCD,0xAC,0x02,0x84,0x33,0x0A,0x19,0x38,0x9E,0xE6,0x73,0x4A,0x11,0x5D,
+0xBF,0x85,0x77,0x08,0xCD,0xD9,0x96,0x0D,0x79,0x78,0xCC,0x35,0x06,0x8E,0xF9,0xFE,
+0x66,0xB9,0x21,0x03,0x20,0x29,0x1E,0x27,0xCA,0x86,0x82,0xE6,0x45,0x07,0xDD,0xA9,
+0xB6,0xD5,0xA2,0x03,0xEC,0xAD,0x62,0x45,0x2D,0xCE,0x79,0xBD,0x8F,0x2D,0x10,0x18,
+0xE6,0x0A,0x6F,0xAA,0x6F,0x46,0x84,0x32,0x9F,0x29,0x2C,0xC2,0xF0,0xEB,0x18,0x6F,
+0xF2,0x3A,0xDC,0xEA,0x7B,0x0C,0x81,0x2D,0xCC,0xEB,0xA1,0x51,0x77,0x2C,0xFB,0x49,
+0xE8,0x90,0xF7,0x90,0xCE,0x5C,0x01,0xF3,0x5C,0xF4,0x41,0xAB,0x04,0xE7,0x16,0xCC,
+0x3A,0x05,0x54,0x55,0xDC,0xED,0xA4,0xD6,0xBF,0x3F,0x9E,0x08,0x93,0xB5,0x63,0x38,
+0x90,0xF7,0x5A,0xF0,0xA2,0x5F,0x56,0xC8,0x08,0x70,0xCB,0x24,0x16,0xDD,0xD2,0x74,
+0x95,0x3A,0x1A,0x2A,0x74,0xC4,0x9D,0xEB,0xAF,0x69,0xAA,0x51,0x39,0x65,0x94,0xA2,
+0x4B,0x1F,0x1A,0x60,0x52,0x39,0xE8,0x23,0xEE,0x58,0x39,0x06,0x3D,0x22,0x6A,0x2D,
+0xD2,0x91,0x25,0xA5,0x2E,0x71,0x62,0xA5,0x0B,0xC1,0xE5,0x6E,0x43,0x49,0x7C,0x58,
+0x46,0x19,0x9F,0x45,0x49,0xC6,0x40,0x09,0xA2,0x99,0x5B,0x7B,0x98,0x7F,0xA0,0xD0])
+
+KEY_TABLE_2 = bytes([
+0xB8,0xC5,0xF7,0x84,0xE4,0x5A,0x23,0x7B,0xC8,0x90,0x1D,0xF6,0x5D,0x09,0x51,0xC1,
+0x07,0x24,0xEF,0x5B,0x1D,0x73,0x90,0x08,0xA5,0x70,0x1C,0x22,0x5F,0x6B,0xEB,0xB0,
+0x06,0xC7,0x2A,0x3A,0xD2,0x66,0x81,0xDB,0x41,0x62,0xF2,0x97,0x17,0xFE,0x05,0xEF,
+0xA3,0xDC,0x22,0xB3,0x45,0x70,0x3E,0x18,0x2D,0xB4,0xBA,0x0A,0x65,0x1D,0x87,0xC3,
+0x12,0xCE,0x8F,0x9D,0xF7,0x0D,0x50,0x24,0x3A,0xF3,0xCA,0x70,0x6B,0x67,0x9C,0xB2,
+0xC2,0x4D,0x6A,0x0C,0xA8,0xFA,0x81,0xA6,0x79,0xEB,0xBE,0xFE,0x89,0xB7,0xAC,0x7F,
+0x65,0x43,0xEC,0x56,0x5B,0x35,0xDA,0x81,0x3C,0xAB,0x6D,0x28,0x60,0x2C,0x5F,0x31,
+0xEB,0xDF,0x8E,0x0F,0x4F,0xFA,0xA3,0xDA,0x12,0x7E,0xF1,0xA5,0xD2,0x22,0xA0,0x0C,
+0x86,0x8C,0x0A,0x0C,0x06,0xC7,0x65,0x18,0xCE,0xF2,0xA3,0x68,0xFE,0x35,0x96,0x95,
+0xA6,0xFA,0x58,0x63,0x41,0x59,0xEA,0xDD,0x7F,0xD3,0x1B,0xA8,0x48,0x44,0xAB,0x91,
+0xFD,0x13,0xB1,0x68,0x01,0xAC,0x3A,0x11,0x78,0x30,0x33,0xD8,0x4E,0x6A,0x89,0x05,
+0x7B,0x06,0x8E,0xB0,0x86,0xFD,0x9F,0xD7,0x48,0x54,0x04,0xAE,0xF3,0x06,0x17,0x36,
+0x53,0x3F,0xA8,0x11,0x53,0xCA,0xA1,0x95,0xC2,0xCD,0xE6,0x1F,0x57,0xB4,0x7F,0xAA,
+0xF3,0x6B,0xF9,0xA0,0x27,0xD0,0x09,0xEF,0xF6,0x68,0x73,0x60,0xDC,0x50,0x2A,0x25,
+0x0F,0x77,0xB9,0xB0,0x04,0x0B,0xE1,0xCC,0x35,0x31,0x84,0xE6,0x22,0xF9,0xC2,0xAB,
+0x95,0x91,0x61,0xD9,0x2B,0xB9,0x72,0x4E,0x10,0x76,0x31,0x66,0x0A,0x0B,0x2E,0x83])
+
+def u32(b, o): return struct.unpack_from('<I', b, o)[0]
+
+def walk_chunks(d):
+    o = 0; out = []
+    while o + 16 <= len(d):
+        name = d[o:o+4]
+        tl = u32(d, o+4) & 0x0FFFFFFF
+        ctype = tl & 0x7F
+        length = ((tl >> 7) & 0x7FFFF) << 4
+        if length < 16 or o + length > len(d):
+            raise ValueError(f"bad chunk at {o:#x}: name={name} tl={tl:#x} len={length:#x}")
+        out.append({'name': name.rstrip(b'\x00').decode(errors='replace'),
+                    'type': ctype, 'off': o, 'payload': d[o+16:o+length]})
+        o += length
+    assert o == len(d), (o, len(d))
+    return out
+
+def decode_1b(b):  # MZB
+    b = bytearray(b)
+    if b[3] <= 0x1A: return bytes(b)
+    ln = u32(b, 0) & 0xFFFFFF
+    key = KEY_TABLE_1[b[7] ^ 0xFF]
+    kc = 0; pos = 8
+    while pos < ln:
+        xl = ((key >> 4) & 7) + 0x10
+        if (key & 1) and pos + xl < ln:
+            for i in range(xl): b[pos+i] ^= 0xFF
+        kc += 1; key += kc; pos += xl
+    nc = u32(b, 4) & 0xFFFFFF
+    for i in range(nc):
+        base = 0x20 + i*0x64
+        for j in range(16): b[base+j] ^= 0x55
+    return bytes(b)
+
+def decode_05(b):  # MMB stage 1
+    b = bytearray(b)
+    if b[3] <= 0x04: return bytes(b)
+    ln = u32(b, 0) & 0xFFFFFF
+    key = KEY_TABLE_1[b[5] ^ 0xF0]
+    kc = 0
+    for pos in range(8, ln):
+        x = ((key << 8) | key) & 0xFFFF
+        kc = (kc + 1) & 0xFF; key = (key + kc) & 0xFF
+        b[pos] ^= (x >> (key & 7)) & 0xFF
+        kc = (kc + 1) & 0xFF; key = (key + kc) & 0xFF
+    return bytes(b)
+
+def decode_ffff(b):  # MMB stage 2
+    b = bytearray(b)
+    if b[6] != 0xFF or b[7] != 0xFF: return bytes(b)
+    ln = u32(b, 0) & 0xFFFFFF
+    key1 = b[5] ^ 0xF0
+    key2 = KEY_TABLE_2[key1]
+    dc = (((ln - 8) & 0xFFFFFFF0) - ((ln - 8) >> 0x1F)) >> 1
+    if 8 + dc >= len(b): raise ValueError("bad decode_count")
+    for off in range(0, dc, 8):
+        if key2 & 1:
+            a = 8 + off; c = 8 + off + dc
+            b[a:a+8], b[c:c+8] = b[c:c+8], b[a:a+8]
+        key1 = (key1 + 9) & 0xFF; key2 = (key2 + key1) & 0xFF
+    return bytes(b)
+
+def sstr(b): return b.split(b'\x00')[0].decode(errors='replace').rstrip(' ')
+
+def parse_mzb_placements(payload):
+    d = decode_1b(payload)
+    count = u32(d, 4) & 0xFFFFFF
+    out = []
+    for i in range(count):
+        o = 0x20 + i*0x64
+        name = sstr(d[o:o+16])
+        t = struct.unpack_from('<9f', d, o+16)
+        out.append({'id': name, 'tr': t[0:3], 'rot': t[3:6], 'sc': t[6:9],
+                    'unk': d[o+52:o+100]})
+    return out, d
+
+def parse_mmb(payload):
+    d = decode_ffff(decode_05(payload))
+    first = u32(d, 0)
+    hdr = {'len': first & 0xFFFFFF, 'cntbyte': (first >> 24) & 0xFF,
+           'kind': d[4], 'b5': d[5], 'b6': d[6], 'b7': d[7],
+           'moniker': sstr(d[8:16]), 'id': sstr(d[16:32]),
+           'pieces': u32(d, 32),
+           'bbox': struct.unpack_from('<6f', d, 36)}
+    o = 60
+    npieces = hdr['pieces'] if hdr['cntbyte'] > 1 else 9
+    offs = []
+    for _ in range(npieces):
+        v = u32(d, o); o += 4
+        if v == 0: break
+        if v > len(d): raise ValueError("mmb offset too big")
+        offs.append(v)
+    vsize = 48 if hdr['kind'] == 2 else 36
+    blocks = []
+    for bo in offs:
+        o = bo
+        mcount = u32(d, o); bbox = struct.unpack_from('<6f', d, o+4)
+        face_id = u32(d, o+28); o += 32
+        models = []
+        for _ in range(mcount):
+            tex_kind = sstr(d[o:o+8]); tex_id = sstr(d[o+8:o+16])
+            caf = u32(d, o+16); vcount = caf & 0x0FFFFFFF; flags = caf >> 28
+            o += 20
+            verts = []
+            for vi in range(vcount):
+                if vsize == 36:
+                    x,y,z, hx,hy,hz = struct.unpack_from('<6f', d, o)
+                    col = u32(d, o+24); uu,vv = struct.unpack_from('<2f', d, o+28)
+                else:
+                    x,y,z, dx,dy,dz, hx,hy,hz = struct.unpack_from('<9f', d, o)
+                    col = u32(d, o+36); uu,vv = struct.unpack_from('<2f', d, o+40)
+                verts.append((x,y,z,col,uu,vv))
+                o += vsize
+            icount = u32(d, o); o += 4
+            idx = struct.unpack_from(f'<{icount}H', d, o)
+            o += ((icount + 1) & ~1) * 2
+            models.append({'tex': (tex_kind, tex_id), 'flags': flags,
+                           'verts': verts, 'idx': idx})
+        blocks.append({'face_id': face_id, 'bbox': bbox, 'models': models})
+    return {'hdr': hdr, 'blocks': blocks}
+
+def tris_from_model(m, kind):
+    idx = m['idx']
+    tris = []
+    if kind in (1, 3):  # strip
+        for i in range(len(idx) - 2):
+            a, b, c = idx[i], idx[i+1], idx[i+2]
+            if a == b or b == c or a == c: continue
+            tris.append((a, c, b) if (i & 1) else (a, b, c))
+    else:               # list
+        for i in range(0, len(idx) - 2, 3):
+            tris.append((idx[i], idx[i+1], idx[i+2]))
+    return tris
+
+def trs_matrix(tr, rot, sc):
+    cx, sx = math.cos(rot[0]), math.sin(rot[0])
+    cy, sy = math.cos(rot[1]), math.sin(rot[1])
+    cz, sz = math.cos(rot[2]), math.sin(rot[2])
+    sxsy, cxsy = sx*sy, cx*sy
+    return [
+        [cy*cz*sc[0],             cy*sz*sc[0],             -sy*sc[0]],
+        [(sxsy*cz - cx*sz)*sc[1], (sxsy*sz + cx*cz)*sc[1], sx*cy*sc[1]],
+        [(cxsy*cz + sx*sz)*sc[2], (cxsy*sz - sx*cz)*sc[2], cx*cy*sc[2]],
+        [tr[0], tr[1], tr[2]],
+    ]
+
+def apply_m(m, v):
+    x, y, z = v[0], v[1], v[2]
+    return (m[0][0]*x + m[1][0]*y + m[2][0]*z + m[3][0],
+            m[0][1]*x + m[1][1]*y + m[2][1]*z + m[3][1],
+            m[0][2]*x + m[1][2]*y + m[2][2]*z + m[3][2])
+
+def det3(m):
+    return (m[0][0]*m[1][1]*m[2][2] + m[0][1]*m[1][2]*m[2][0] + m[0][2]*m[1][0]*m[2][1]
+          - m[0][0]*m[1][2]*m[2][1] - m[0][1]*m[1][0]*m[2][2] - m[0][2]*m[1][1]*m[2][0])
+
+def load_zone(path):
+    d = open(path, 'rb').read()
+    chunks = walk_chunks(d)
+    mzb = None; mmbs = {}
+    fails = []
+    for c in chunks:
+        if c['type'] == 0x1C and mzb is None:
+            try:
+                mzb = parse_mzb_placements(c['payload'])
+            except Exception as e:
+                fails.append(('mzb', c['name'], str(e)))
+        elif c['type'] == 0x2E:
+            try:
+                m = parse_mmb(c['payload'])
+                mmbs.setdefault(m['hdr']['id'] or c['name'], m)
+            except Exception as e:
+                fails.append(('mmb', c['name'], str(e)))
+    return chunks, mzb, mmbs, fails
+
+if __name__ == '__main__':
+    import sys
+    for path in ('/mnt/user-data/uploads/20.DAT', '/mnt/user-data/uploads/42.DAT'):
+        print(f"\n================= {path.split('/')[-1]} =================")
+        chunks, mzb, mmbs, fails = load_zone(path)
+        cnt = Counter(c['type'] for c in chunks)
+        print(f"chunks={len(chunks)} typecensus=", {f'{t:#04x}': n for t, n in sorted(cnt.items())})
+        print(f"MMB models parsed: {len(mmbs)}  parse failures: {len(fails)}")
+        for f in fails[:5]: print("  FAIL", f)
+        if mzb:
+            pls, raw = mzb
+            print(f"MZB placements: {len(pls)}")
+            ids = Counter(p['id'] for p in pls)
+            print("  first 8 placements:")
+            for p in pls[:8]:
+                print(f"    id='{p['id']}' tr=({p['tr'][0]:8.2f},{p['tr'][1]:8.2f},{p['tr'][2]:8.2f}) "
+                      f"rot=({p['rot'][0]:5.2f},{p['rot'][1]:5.2f},{p['rot'][2]:5.2f}) sc=({p['sc'][0]:.2f},{p['sc'][1]:.2f},{p['sc'][2]:.2f})")
+            matched = sum(1 for p in pls if p['id'] in mmbs)
+            print(f"  placement->MMB id match: {matched}/{len(pls)}")
+        else:
+            print("NO MZB chunk parsed")
+        # texture census across all mmb models
+        texcnt = Counter(); tricnt = Counter()
+        for mid, m in mmbs.items():
+            for b in m['blocks']:
+                for mod in b['models']:
+                    texcnt[mod['tex']] += 1
+                    tricnt[mod['tex']] += len(tris_from_model(mod, m['hdr']['kind']))
+        print(f"  distinct textures referenced by MMB pieces: {len(texcnt)}")
+        for tex, n in tricnt.most_common(20):
+            print(f"    {tex[0]:>8}/{tex[1]:<10} pieces={texcnt[tex]:4d} tris={n}")
+        kinds = Counter(m['hdr']['kind'] for m in mmbs.values())
+        print("  mmb kind census:", dict(kinds))

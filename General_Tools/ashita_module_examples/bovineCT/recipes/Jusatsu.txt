@@ -1,0 +1,6 @@
+# bovinect recipe file
+name: Jusatsu
+crystal: Dark Crystal
+Bast Parchment, 1
+Beastman Blood, 1
+Black Ink, 1

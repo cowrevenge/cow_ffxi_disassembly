@@ -1,0 +1,146 @@
+START HERE — map of this vault (rewritten 2026-10-08 after the folder reorg)
+
+WHAT THIS IS
+  The complete research corpus for the retail FINAL FANTASY XI client
+  (FFXiMain.dll): static disassembly passes, DAT/ROM analysis, evidence dumps,
+  and all tooling that produced them. The remake itself lives elsewhere
+  (C:\Cow_Kuluu_ffxi-engine). Convention rules + binary facts + pass table:
+  README.md in this folder. Current research state: Disassembly_Docs/summary.md.
+
+FOLDER MAP
+
+  General_Docs/          non-DLL working docs
+    tools_inventory.md     tool inventory (paths inside are pre-reorg; banner on top)
+
+  General_Tools/         tooling NOT tied to DLL analysis
+    texdat/                DAT<->PNG texture converter suite (texfmt.py, dat/png_to_*)
+    extract_dats.py        ROM/DAT extraction -> Extracted_Dats layout (+ INDEX.csv)
+    mzb2ximesh.py          MZB -> LSB .ximesh collision generator
+    zoneparse.py           zone DAT parsing; gen_zonemaps.py renders maps from vendor/
+    vendor/                LSB-pinned data: zones/*/mobs|npcs|zone.yaml,
+                           live_mob_pools.tsv, lsb_commit.txt (pinned LSB commit)
+    ashita_module_examples/ vendored community Ashita modules (bovine*, xiui; they keep
+                           their own upstream names and inner .git dirs — leave them).
+                           Three of them (xiui/, bovineFH/, bovineBattle/) ARE separate cloned
+                           repos (CowXIUI, bovinefh, bovinebattle) and are gitignored: never
+                           embedded here, so this vault cannot fork or duplicate them.
+    arc-dump/ packet-capture/ smd2glb/  empty placeholders, never populated
+
+  Disassembly_Docs/      all DLL/DAT findings ("how something works in the dll")
+    summary.md             cross-pass synthesis: verified / believed / open. READ FIRST.
+    movement.md            M pass — local-player walker (speed law, circle-walk, facing)
+    camera.md              C pass — event camera manager + DEFCAMERA
+    mob_animation.md       F pass — animation driver 0x0E/0x28 -> RenderFlags -> routine/stage
+    target_track.md        T pass — target acquisition + target-track steering
+    joint.md               J pass — skeleton joint velocity-curve integrator
+    drivetask.md           D pass — DriveTask overlay (LockLookAt / ActorRotation)
+    event_vm.md            E pass — cutscene event VM opcodes/waits
+    ui.md                  U pass — event UI/HUD/dialog control
+    lookat.md              W/W2/W3 passes — the TWO look-at systems, attach frames,
+                           authored ellipse limits (the head/shoulder bend law)
+    dancer_engine.md       [web]-tier ingest of WGINC/DancingMad + our oracle list
+    event_evidence.md      raw E-pass evidence dumps
+    event_opcode_table.md  opcode coverage table
+    mob_evidence_1..3.md   F-pass evidence trail
+    tpc_package_table.md   TPC package layout
+    ffxi_string_tables.md  d_msg string-table formats (see semantic_resolver)
+    g144-crit-flash.md     the muted hit3 flash in the hi14 crit chain (DAT values)
+    Party_frame.md         solo/party UI coding & loading
+    Texture_Mesh.md        textures/meshes out of retail ROMs
+    battle_retail_spec.md  /attack engage flow, LSB engage gates, full MsgBasic mechanic
+                           table, sub-target model (distilled 2026-10-08 from retired wip_battle.md)
+    cs_docs/               cutscene/event-VM research per zone (homepoint/signet/rent...)
+                           + census/ (cs-census.txt, cs-vm-census.txt) + opcode coverage
+                           (cs-opcode-coverage.md is the single survivor; it absorbed and
+                           replaced cs-opcode-round13.md in the 2026-10-08 triage)
+
+  Disassembly_Tools/     the canonical analysis suite (run from THIS folder)
+    common.py              core: PE+POL1 decode, byte scans, cached whole-image sweep
+    disasm.py xref.py      disassemble an RVA range / find xrefs to an RVA
+    espmap.py              resolve [esp+N] operands to frame-stable slots
+    p0..p11_*.py           per-pass scanners (modmap, anchors, 0x0E handler, gates,
+                           event VM, jumptables, zone/scene, combat tags, packet tables)
+    dat_routines.py        model DAT -> chunk table + scheduler routines + clip names
+                           (UNION of the three old copies as of 2026-10-08: corrected
+                           chunk-kind table AND the verbatim-payload/print guards)
+    ffxi_dat_find.py       find a string/clip across every DAT in an install
+    scene_dat_parse.py     zone/scene DAT parser      probe_tpc_files.py  TPC prober
+    assemble_event_evidence.py  builds the E-pass evidence docs
+    xref_vtable.py         vtable-slot grep (find all implementers of a slot)
+    semantic_resolver.py   string-table semantic resolver (reads General_Tools/vendor/)
+    colcheck.py uv_island_analysis.py uv_raster.py   DAT/mesh/UV analysis
+    census/                19 one-shot census scripts (mask_census, fnstsw_census,
+                           rtti_graph, find_vtbl2, who_makes_tasks, interp_case, ...)
+    probes/                offline C++ probes used to diff against LSB code
+                           (TT/blowfish key schedule, spawn walk, ximesh, zonevis, ROM scan)
+    artifacts/             ffximain_tables_v0.zip — 2026-10-02 cloud-session tables:
+                           unpack.py -> FFXiMain.unpacked.dll + tables_*.csv (vtables,
+                           functions, strings, classnames). Vendored; never regenerate.
+    .cache/                sweep pickle cache (keyed by dll name + TDS stamp). Regenerable.
+
+    Run notes: pip install pefile capstone. Most scripts open 'FFXiMain.unpacked.dll'
+    and the tables_*.csv from the current directory — unpack once into this folder from
+    artifacts/ffximain_tables_v0.zip and run everything here; .cache makes re-scans cheap.
+
+  Headless/              headless test bed
+    LSB_Docker.md          bring up the LandSandBoat docker stack kuluu tests against
+    Headless_testing.md    how headless verification runs (screenshots, driving, gotchas)
+    stage_hd_test.py       stages West Ronfaure HD-swap textures; defaults now point at
+                           ../Extracted_Dats/ and ../Disassembly_Tools/ — run from this folder
+
+  Extracted_Dats/        18 GB local DAT extraction (INDEX.csv + layout.md describe it).
+                         LOCAL TEST DATA ONLY — gitignored, never commit anywhere.
+
+REORG LOG (2026-10-08)
+  Moved in: everything previously scattered at this root and inside Cow_doc/, cow_tools/,
+  ffxi_disassembly/ (the copy from the engine tree), session_out/, tools/.
+  Renames: extracted_dats/ -> Extracted_Dats/; cow_ashita_module_examples ->
+  General_Tools/ashita_module_examples; Cow_doc/reports + cs_docs -> under
+  Disassembly_Docs; old root `tools/` (census scripts) -> Disassembly_Tools/census.
+  Removed, with reason:
+    - Cow_doc/brief/bugfix-brief.md and issues_9_19_TODO.md — agent task briefs,
+      not game data (policy: no agent briefs in the vault; game findings they cite live
+      in Disassembly_Docs).
+    - ffxi_disassembly/ whole copy — byte-identical to the root suite except docs that
+      were strict older subsets of Disassembly_Docs/ and dat_routines.py, whose only
+      unique content (print guards, verbatim payloads, 0x28 measurement note) was merged
+      into the canonical copy.
+    - duplicate old dat_routines.py variants — replaced by one union file.
+    - root summary.md — older twin of docs/summary.md (kept the newer).
+    - Cow_doc/disassmembly_docs/README.md — a tombstone ("Moved") pointing at the copy above.
+    - Disassembly_Tools/legacy_ffxi_disasm/ (~337 MB: Sep 8 – early Oct snapshot of the suite,
+      with its out2/out3/out4 run outputs and own .cache) — deleted locally 2026-10-08 as
+      superseded garbage. It was never committed, so no git history changed; every tool in it
+      has a canonical copy in Disassembly_Tools/.
+  Dedupe proof: after merging, a normalized-line containment audit over all 1,711 doc
+  pairs found NO duplicate content between distinct research docs (threshold >25%
+  shared significant lines). The only flagged pairs were adjacent round-reports repeating
+  open-item tables; those files were then deleted entirely in TRIAGE 2 below. Paraphrase-level
+  semantic overlap is NOT machine-checked; full close-reading of every doc was not done.
+  TRIAGE 2 (same day, content-level): all 20 round-reports + endresult + handoff files
+  deleted - measured 100% evidence-token coverage in canonical docs, rest was agent work
+  log. wip_battle.md -> battle_retail_spec.md (retail spec/LSB gates/MsgBasic table kept,
+  client-state snapshots + bug histories + work lists dropped). op_code_9_19_TODO.md deleted
+  (kuluu scheduler handler ledger; xim-derived, superseded by cs-opcode-coverage.md state).
+  cs-opcode-round13.md pruned: its per-family retail-semantics section merged into
+  cs_docs/cs-opcode-coverage.md as Appendix A, rest dropped. cutscenes.md lost its kuluu-
+  state and TODO sections (61 lines). g144-crit-flash.md stripped to DAT knowledge.
+  Party_frame/Texture_Mesh stamped 'dated snapshot - not reverified'.
+  De-branding: folder names no longer carry the cow prefix; README title changed.
+  Secrets scan: clean on 2026-10-08 (no tokens/passwords anywhere in tracked text files).
+
+GIT STATE (informational — nothing was committed by the reorg)
+  branch main, origin https://github.com/cowrevenge/cow_ffxi_disassembly.git,
+  local is ~28 commits ahead of origin/main as of 2026-10-08. The reorg shows up in
+  `git status` as mass renames/deletions — commit it deliberately, not blindly.
+
+RULES OF THE HOUSE
+  1. Never commit DATs or the extracted tree (see .gitignore). Retail client never goes in git.
+  2. No credentials/tokens; prose install paths (C:\PhoenixXI\...) are machine refs, fine.
+  3. One canonical copy of each tool: Disassembly_Tools/ top level. The old read-only
+     snapshot (legacy_ffxi_disasm/) was deleted 2026-10-08 — do not recreate it.
+  4. Vault = game-system knowledge ONLY. No session logs, work ledgers, agent briefs,
+     or implementation-state docs (they rot and fork). That class was purged 2026-10-08;
+     kuluu status lives in the engine repo/beads. Docs that ARE kept carry a freshness
+     stamp: date last verified against which build.
+  5. New docs land in Disassembly_Docs/, new scanners in Disassembly_Tools/. Keep START_HERE current.

@@ -1,0 +1,4 @@
+# bovinect recipe file
+name: Artificial Lens
+crystal: Fire Crystal
+Glass Fiber, 2

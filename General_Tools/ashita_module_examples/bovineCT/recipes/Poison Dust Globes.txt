@@ -1,0 +1,4 @@
+# bovinect recipe file
+name: Poison Dust
+crystal: Lightng. Crystal
+Yellow Globe, 2

@@ -1,0 +1,6 @@
+# bovinect recipe file
+name: Eye Drops
+crystal: Water Crystal
+Chamomile, 1
+Ahriman Tears, 1
+Distilled Water, 1

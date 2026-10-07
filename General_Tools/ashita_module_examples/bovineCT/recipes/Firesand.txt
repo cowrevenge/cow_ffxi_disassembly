@@ -1,0 +1,5 @@
+# bovinect recipe file
+name: Firesand
+crystal: Earth Crystal
+Bomb Ash, 2
+Sulfur, 1
