@@ -18,7 +18,6 @@ synthesis (what is verified, what is believed, what is still open).
 | `Disassembly_Docs/` | All DLL/DAT research docs: pass docs (movement, camera, joint…), the event/cutscene (`cs_docs/`) and dated round-report (`reports/`) subfolders |
 | `Disassembly_Tools/` | Python scanners over the DLL + DATs (canonical suite), `census/`, `probes/`, `artifacts/`, `.cache/` |
 | `General_Tools/` | Non-DLL tooling: texture/mesh converters, zone-map tools, vendor data, Ashita module examples |
-| `Headless/` | Headless test-bed docs + the stage-texture HD test script (drives `Extracted_Dats/`) |
 | `Extracted_Dats/` | 18 GB local DAT extraction — **never committed**, see `.gitignore` |
 | `General_Docs/` | Non-DLL working documents (tool inventory etc.) |
 
@@ -137,6 +136,9 @@ Requires: `pip install pefile capstone`.
   `research/XiEvents/...`) — those stay local.
 - The old `legacy_ffxi_disasm/` snapshot of the tool suite (Sep 8 – early Oct) and its
   run outputs — deleted locally 2026-10-08 as superseded garbage; it was never committed.
+- The headless/drive workflow, after the `Headless/` folder went with it: those two docs were stale.
+  Canonical rules live engine-side in `.agents/skills/verify/` (SKILL.md + drive-headless.md /
+  drive-gui.md / stack.md), not duplicated here — see START_HERE for the exact paths.
 - `General_Tools/ashita_module_examples/{xiui,bovineFH,bovineBattle}/` — local clones of
   their own repos (`CowXIUI`, `bovinefh`, `bovinebattle`); gitignored so this vault does not
   fork them. The rest of the examples (plain dirs + zips) are committed.

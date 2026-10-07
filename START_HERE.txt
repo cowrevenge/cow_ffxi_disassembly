@@ -82,11 +82,19 @@ FOLDER MAP
     and the tables_*.csv from the current directory — unpack once into this folder from
     artifacts/ffximain_tables_v0.zip and run everything here; .cache makes re-scans cheap.
 
-  Headless/              headless test bed
-    LSB_Docker.md          bring up the LandSandBoat docker stack kuluu tests against
-    Headless_testing.md    how headless verification runs (screenshots, driving, gotchas)
-    stage_hd_test.py       stages West Ronfaure HD-swap textures; defaults now point at
-                           ../Extracted_Dats/ and ../Disassembly_Tools/ — run from this folder
+  NO Headless/ FOLDER (removed 2026-10-08). Its two docs were stale: LSB_Docker.md described the
+  superseded pre-lsb-stack.sh stack layout, and Headless_testing.md was a pointer at a
+  kuluu_headless/README.md that exists in no tree any more. The real headless workflow rules are
+  engine-side material (rule 4), not vault material:
+      C:\Cow_Kuluu_ffxi-engine\.agents\skills\verify\
+        SKILL.md                        canonical verify recipes + evidence recording
+        references/drive-headless.md    session surfaces + Surface A/D pixel recipes
+                                        (recovered 2026-10-08 from engine rev 7ad5e4d — PR #943 had
+                                        cut 463 lines to 115 and dropped the pixel surfaces)
+        references/drive-gui.md         native window + agent socket drive
+        references/stack.md             LSB container bring-up + gotchas
+  What stays true vault-side: a session-only headless run has no renderer, so it can never be pixel
+  evidence; DAT/cutscene capture evidence lives in Disassembly_Docs/cs_docs/.
 
   Extracted_Dats/        18 GB local DAT extraction (INDEX.csv + layout.md describe it).
                          LOCAL TEST DATA ONLY — gitignored, never commit anywhere.
@@ -118,6 +126,12 @@ REORG LOG (2026-10-08)
       (movement / mob_animation / lookat / camera); kuluu status itself lives in the engine
       repo + beads. The two surviving citations were rewritten to name the measurement command
       instead of pointing at a dead file.
+    - Headless/ (LSB_Docker.md, Headless_testing.md, stage_hd_test.py) — removed 2026-10-08: both
+      docs were stale copies of engine-side material (one described the pre-lsb-stack.sh stack layout,
+      one pointed at kuluu_headless/README.md, which exists in no tree). The workflow itself is now
+      recovered intact in the engine's verify skill. stage_hd_test.py was genuine vault tooling though
+      — recover it with `git show 76303b8:Headless/stage_hd_test.py` (and re-home it under
+      General_Tools/) if the HD-swap staging is still wanted.
   Dedupe proof: after merging, a normalized-line containment audit over all 1,711 doc
   pairs found NO duplicate content between distinct research docs (threshold >25%
   shared significant lines). The only flagged pairs were adjacent round-reports repeating
