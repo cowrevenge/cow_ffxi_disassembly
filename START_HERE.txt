@@ -129,10 +129,12 @@ REORG LOG (2026-10-08)
   De-branding: folder names no longer carry the cow prefix; README title changed.
   Secrets scan: clean on 2026-10-08 (no tokens/passwords anywhere in tracked text files).
 
-GIT STATE (informational — nothing was committed by the reorg)
-  branch main, origin https://github.com/cowrevenge/cow_ffxi_disassembly.git,
-  local is ~28 commits ahead of origin/main as of 2026-10-08. The reorg shows up in
-  `git status` as mass renames/deletions — commit it deliberately, not blindly.
+GIT STATE (informational)
+  branch main, origin https://github.com/cowrevenge/cow_ffxi_disassembly.git.
+  The reorg was committed and pushed on 2026-10-08 (76303b8), together with the 28 research
+  commits that were sitting ahead of origin/main. Working tree is clean; what remains outside
+  git is only gitignored material: Extracted_Dats/, .cache/, out*/, and the three cloned
+  example repos. Verify against `git status` + `git log --oneline -3`, not this paragraph.
 
 RULES OF THE HOUSE
   1. Never commit DATs or the extracted tree (see .gitignore). Retail client never goes in git.
