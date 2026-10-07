@@ -112,6 +112,12 @@ REORG LOG (2026-10-08)
       with its out2/out3/out4 run outputs and own .cache) — deleted locally 2026-10-08 as
       superseded garbage. It was never committed, so no git history changed; every tool in it
       has a canonical copy in Disassembly_Tools/.
+    - kuluu_gaps.md (649 lines) — deleted 2026-10-08: an implementation-status ledger (symptom
+      rows A-G, play-test P1-P6, kuluu commit pins, test names), i.e. rule 4 material, and
+      stale by then anyway. Its game-knowledge claims already live in the pass docs it cites
+      (movement / mob_animation / lookat / camera); kuluu status itself lives in the engine
+      repo + beads. The two surviving citations were rewritten to name the measurement command
+      instead of pointing at a dead file.
   Dedupe proof: after merging, a normalized-line containment audit over all 1,711 doc
   pairs found NO duplicate content between distinct research docs (threshold >25%
   shared significant lines). The only flagged pairs were adjacent round-reports repeating

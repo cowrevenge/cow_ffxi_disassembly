@@ -1125,8 +1125,8 @@ So there is no roll term and nothing else: retail builds the **minimal-arc quate
 Status tags as of this split: the **limit/slew/tug hunt** below was closed by §E/§E.8 (authored
 `{xlim,ylim,scale}` records in the skeleton chunk + bend bones from reference slots {3,7}; no
 J-pass curve-table search remains). The **"steering question"** was answered 2026-10-04: look-at is a
-bone mechanic layered by the W-pass controller — not animation curves reacting to target (kuluu_gaps
-B4 ruling + rows A1-A6 landed). The sqmoKeyChannel interpolation conflict below is **resolved [V]** in
+bone mechanic layered by the W-pass controller — not animation curves reacting to target (the kuluu_gaps B4
+ruling + rows A1-A6 landed; that gaps ledger was deleted 2026-10-08 as outdated work-state). The sqmoKeyChannel interpolation conflict below is **resolved [V]** in
 dancer_engine.md §4a (caller census: all 46+26 evaluator sites sit in the CMo* effect region, zero in
 motion channels). What stays open from this block verbatim: nothing S3-specific — it stands as the
 record of what we believed mid-dig.
