@@ -57,7 +57,7 @@ all start at scale 0, grow on k-tracks, and carry alphas of 0.25–0.50:
 | g143 | hit1 | (0,0,1)         | → 0.65×             | 0.502 | central streak               |
 | g141 | eis2 | (0,0,1)         | → **3.66×**         | 0.502 | the big expanding flash      |
 | **g144** | **hit3** | **(1,1,1)**   | **none**            | **0.000** | **controller rumble cue — non-visual** |
-| g142 | —    | —               | —                   | —     | screen-space haze smear      |
+| g142 | linked texture quad, authored scale | — | — | k143: 0 → 0.48 hold → 0.01 | haze FIELD anchored at the hit site — bends scene pixels inside the texture's footprint; draws nothing itself |
 
 ## What g144 actually is: controller rumble
 
