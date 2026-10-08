@@ -17,22 +17,32 @@ re-verified at 0x6A995428 during this pass.
 
 This pass was cut to answer: *what does retail do with the player's body when a
 target is present — the "slight body tug", the look limit, and the ease rates?*
-The full writeup of 0xA7B80 + 0xA80D0 + 0xA8000 is below. **Final-verification
-correction (this revision):** in this build (TDS 0x6A995428) the target-state
-machinery of those functions is largely **inert** — the state classifier is
-overflow-flag-gated and returns only {0,1} (T15), the state field is never
-written 2/3/4 (T14), and the ease selector's live path is the identity (T3).
-The head-follow-up-to-limit / reset-to-straight / slight body-tug behavior
-observed in this retail client therefore lives in the skeleton/joint layer, not
-in this state machine; see §9 for the corrected relevance and the next dig.
+The full writeup of 0xA7B80 + 0xA80D0 + 0xA8000 is below.
+
+**CORRECTION 2026-10-08 (supersedes an earlier "final verification" claim in this
+document).** An earlier revision declared the target-state machinery inert because its
+tests were read as gated on a FPU **overflow flag**. That was wrong at the bit level:
+the byte pattern `fnstsw ax; and eax, 0x100` tests x87 status **bit 8 = C0**, which per
+Intel's published comparison table (FCOM/FUCOM: greater→C3=0,C2=0,C0=0; less→C0=1;
+equal→C3=1; unordered→all set) is the **less-than** condition — and comparisons *do*
+set it. The classifier 0xA80D0 therefore returns its full bucket set {0,1,2,3,4} (§3,
+corrected truth table), `call 0xA7EF9 mov [esi+0x598], eax` writes those buckets to the
+state field (T14 corrected), and the motion chooser names `mvl `/`mvb `/`mvr `
+(0xC8DAF/0xC8DB7/0xC8DBF gated on state ∈ {2,3,4}) whenever free-run is off — which
+every lock handler sets (0xC5440/0xC54C0). **Side-step clips are live while locked.**
+The flip latch 0xA7EF6..0xA7F2D (§K2 of the locomotion K-pass doc) inserts straight-
+gait frames on a direct L/R reversal (`[esi+0x5b1]=2` countdown when consecutive
+buckets form {2↔4}; each pass with the byte > 0 stores literal 1 into +0x598 and
+decrees). kuluu landed this law in commit `f1bfd06` (ffxi-actor SideStepFlipLatch), which
+also deleted its torso-reconciliation layers — retail has none.
 
 ## 1. Scope
 
 | # | Question | Status |
 |---|----------|--------|
 | Q1 | What is the "big function" the M-pass left at 0xA7B80? | Resolved (T1): target-track parallel move, 2 callers |
-| Q2 | What does 0xA80D0 compute and return? | Resolved (T2, T15): bracket present but overflow-flag-gated; live result {0,1} |
-| Q3 | What are the body-tug / ease rates? | Resolved (T3): 0.125 (st 2/4), 2·vt(0x1B0)·1/60 (st 3) — unreachable in this build (T14); live default = identity |
+| Q2 | What does 0xA80D0 compute and return? | **Corrected 2026-10-08:** bucket classifier on heading/±45° dot signs; full result set {0..4} live (earlier "overflow-gated {0,1}" was a bit misread — see header correction) |
+| Q3 | What are the body-tug / ease rates? | Resolved (T3): 0.125 (st 2/4), 2·vt(0x1B0)·1/60 (st 3) — **reachable** for locked travel (states 2/3/4 are live; see header correction) |
 | Q4 | What is the ±0.78517 rad pair? | Resolved (T4): immediate constants, ≈44.99°, the bracket half-angle |
 | Q5 | Which predicates gate the 0.125 rate? | Resolved (T5): 0x84350/0x84370 mount siblings on [this+0x70] |
 | Q6 | What is 0xAAEF0? | Resolved (T6): 0.8·horizontal-distance getter (vtbl +0x1C8, tag 0x2C) |
@@ -43,8 +53,8 @@ in this state machine; see §9 for the corrected relevance and the next dig.
 | Q11 | Exact provenance of every frame slot in 0xA7B80 | **Open**: shared-frame convention, §9 |
 | Q12 | Head-look joint limit + reset-to-straight | **Open**: NOT in this function's state machine (T14/T15); live mechanism is in the skeleton/joint layer; §9 |
 | Q13 | What is the 0x487F98 slot and is the auto-run angle in degrees? | Resolved (T13): read-only, zero in this build; no degrees conversion exists |
-| Q14 | Who writes state_0x598, and can 2/3/4 occur in this build? | Resolved (T14): 7 writers, only 0/1 written |
-| Q15 | Is the ±44.99° bracket live anywhere in this build? | Resolved (T15): two classifiers (0xA80D0, 0xA82A0), both overflow-flag-gated, both inert |
+| Q14 | Who writes state_0x598, and can 2/3/4 occur in this build? | **Corrected 2026-10-08:** the classifier-return writers (via 0xA6EE4→0xA6EE9 and 0xA7EF1→0xA7EF9) store {0..4}; latch countdown stores literal 1 at 0xA7F23. Full range reachable |
+| Q15 | Is the ±44.99° bracket live anywhere in this build? | **Corrected 2026-10-08:** yes — the "overflow" gating was a misread of C0 (bit 8); classifier returns {0..4} per §3 truth table, chooser consumes it while free-run is off |
 
 ## 2. The big function 0xA7B80 (T1)
 
@@ -242,14 +252,21 @@ int32_t ClassifyTargetState(Actor* p, float* argA, float* argB)
     // Dplus → frame [esp+0x10], Dminus → frame [esp+0x0C] (shifted-slot layout
     // below). Both are finite and bounded for any in-game input.
 
-    // 0xA81BF..0xA828F — BOTH state-entry branches are gated on bit 8 of the x87
-    // status word:  fnstsw ax; and eax, 0x100; jne  — i.e. the OVERFLOW flag.
-    // A comparison of bounded dot products with +0.0 (0x3295D8) can never set
-    // overflow, so for every finite input both tests fall through and the
-    // function returns 1. The state-2/3/4 result blocks (0xA8201, 0xA822B,
-    // 0xA8266) are unreachable in this build.
-    return 1;
+    // 0xA81BF..0xA828F — corrected reading: bit 8 (fnstsw ax; and eax, 0x100) is
+    // x87 condition code C0 = "ST < operand" (Intel FCOM table), NOT an overflow
+    // flag. The tests branch on the signs of three dot products A ([esp+0x20]),
+    // B ([esp+0xc]) and Cc ([esp+0x10]) as follows:
+    if (!(A >= 0)) {                       // first test jne ⇔ A < 0 → bucket-else
+        if (Cc < 0) {
+            return (B < 0) ? 3 : 4;        // ebx=3 @0xA8251 / mov ebx,4 @0xA8279
+        }
+        return 0;
+    }
+    return (B >= 0) ? 1 : 2;               // ebx=1 @0xA81EC / ebx=2 @0xA8216
 }
+// Truth table: A≥0∧B≥0 → 1 ; A≥0∧B<0 → 2 ; A<0∧Cc<0∧B<0 → 3 ;
+//             A<0∧Cc<0∧B≥0 → 4 ; otherwise (incl. |argA| < 0.001) → 0.
+// Chooser mapping: state 2 → `mvr `, 3 → `mvb `, 4 → `mvl ` (0xC8D9E chain).
 ```
 
 The two dot results are stored through the pending (uncleaned) stack of the
@@ -606,3 +623,5 @@ RVA 0x...`.
   the caller-owned movement vector. The whole-function esp fixpoint converged with all indirect
   vtable-call cleanup widths resolved via the class-vtable tables (slots +0x198/+0x1a0/+0x1bc/
   +0x1c0/+0x210/+0x330/+0x340 = plain `ret`; +0x344 = `ret 4`).
+
+> **Also see:** [locomotion_motion_camera_k_pass.md](locomotion_motion_camera_k_pass.md) (K pass 2026-10-08: motion-name chooser, +0x598 write census, chase-camera lock pivot and eye band).

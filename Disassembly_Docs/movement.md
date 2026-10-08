@@ -2234,7 +2234,7 @@ Camera state block (all sites grep-verified):
 
 | 0x10456D74 | hold-off int (= 10) |
 
-| 0x10456D78 | azimuth reflection bound (float; also written at 0x20B81/0x2126F/0x218D7) |
+| 0x10456D78 | vertical-separation latch: stored \|eye.y − look.y\| (written at 0x20B81/0x2126F/0x218D7; see locomotion_motion_camera_k_pass.md §K4 — *not* an azimuth bound) |
 
 | 0x10456D7C | countdown float — **stall-loop-only decrement** (round(tick) gate, §11b); = 20.0 at 0x20769 (entry reachability open [I], §11b); = 8.0 at 0x21147 in **sub_21110** (walker-only callers 0xA5E41/0xA715E, armed under toggle [0x10487F80]); zeroed 0x1FA82 |
 
@@ -2478,11 +2478,13 @@ dot windows -1.0 (@0x32A3D0) / 0.99 (@0x32A3CC), 0x272E0 (divide by 3), x0.01
 
 (@0x329A18) x0.05 (@0x32A3E0), and `fild [0x1035121C]` (int global) before the
 
-eye update 0x1FC97..0x1FCEF; the post-loop reflection rewrites the azimuth as
+eye update 0x1FC97..0x1FCEF; the post-loop correction (this section's "azimuth reflection"
 
-`cam+0x48 = 2*cam+0x48 - [0x10456D78]` when hold-off == 0, countdown > 0, and
+reading is superseded: it is a **vertical-separation latch on eye.y/look.y**, see
 
-cam+0x48 >= cam+0x54.
+locomotion_motion_camera_k_pass.md §K4) shifts `cam+0x48` by
+
+(|cam+0x48 − cam+0x54| − [0x10456D78]) when hold-off == 0, countdown > 0, and cam+0x48 >= cam+0x54.
 
 
 
@@ -3019,3 +3021,5 @@ is in [target_track.md](target_track.md) §6.
 
   named in §11b; arm-8 **sub_21110** fully resolved (§11b).
 
+
+> **Also see:** [locomotion_motion_camera_k_pass.md](locomotion_motion_camera_k_pass.md) (K pass 2026-10-08: motion-name chooser, +0x598 write census, chase-camera lock pivot and eye band).
