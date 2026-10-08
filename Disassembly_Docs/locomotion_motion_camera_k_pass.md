@@ -9,8 +9,11 @@ M32/M34/M35), [target_track.md](target_track.md) (T1/T8/T14/T15).
 (`f1bfd06`), locked-camera cone framing / L/R start / lateral leash (`ca907f4`, `a129728`), lock not
 rewriting free cam, mid-blend clip requests, 16-tick in-step gait blends (`18d870b`, `e8b7af3`) —
 were **playtest-accepted by the owner**: "it all lands, and it's great." Do not disturb these laws
-without new owner instruction. Exception on hold: `anchor_bias_y` pivot quantiser (§K3 port,
-commit `d5b7a73`) is **HOLD** — owner not 100% on framing height yet; leave as landed.
+without new owner instruction. The §K3 anchor-bias port (`d5b7a73`) was put **HOLD** (owner not
+100% on framing height); the owner then supplied its replacement — commit `27807b2` retunes
+`anchor_bias_y` to read the skeleton span before mesh extents with the retail cap, alongside menu-FOV
+lock framing and leg-preserving side-step arcs. Status: **awaiting owner playtest** (supersedes the
+d5b7a73 dial; §K3 byte law unchanged).
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
 
