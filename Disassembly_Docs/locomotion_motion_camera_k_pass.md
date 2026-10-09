@@ -20,7 +20,12 @@ patches landed — `dc45d46` (crossfade from a still again at old gait blend len
 side-step clips, so it runs on every locked A/D), `07fce67` (lock opening swing eases at a quarter
 per tick — §K8's settling law), `177e46d` (Q/E turn-in-place with camera catch; steer a run; leave a
 lock alone — §K7), `35a8b76` (locked S plays the back step, walking or running — §K2 bucket 3→`mvb`).
-Status of 0006–0014: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
+Then the corrective pair: `f7ece3e` strips the two layers `a975fe7` had carried back that fought the
+side-step clips (per-frame torso steer over mvl/mvr = twisted run; a locked-only spine re-blend that
+skipped 27807b2's held-arc law and produced the strafe bounce) — locked_torso keeps only the
+look-at focus measuring from where the chest faces, each bone inside its authored limit;
+`d44da62` completes the Q/E pairing (steering a run swings the camera the same turn at the same
+catch). Status of 0006–0016: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
 the same session — see K2-pass §K3 addendum.
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
