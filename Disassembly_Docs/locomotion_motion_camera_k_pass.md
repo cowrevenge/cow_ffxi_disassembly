@@ -12,8 +12,11 @@ were **playtest-accepted by the owner**: "it all lands, and it's great." Do not 
 without new owner instruction. The §K3 anchor-bias port (`d5b7a73`) was put **HOLD** (owner not
 100% on framing height); the owner then supplied its replacement — commit `27807b2` retunes
 `anchor_bias_y` to read the skeleton span before mesh extents with the retail cap, alongside menu-FOV
-lock framing and leg-preserving side-step arcs. Status: **awaiting owner playtest** (supersedes the
-d5b7a73 dial; §K3 byte law unchanged).
+lock framing and leg-preserving side-step arcs; then on 2026-10-09 four more owner
+patches landed — `dc45d46` (crossfade from a still again at old gait blend lengths), `e28fbdf`
+(camera keys leave a locked camera alone; §K7), `2cddb36` (lock opens to the nearer side; §K8),
+`93145d9` (open menu no longer stomps view zoom). Status of 0006–0010: **awaiting owner playtest**.
+The §K3 quantiser wording itself was corrected by the same session — see K2-pass §K3 addendum.
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
 
@@ -245,3 +248,69 @@ Still open (none gate shipped behaviour):
 * `[cam+0xf0]` byte semantics (arrival flag cleared ≤0.05, compared ≥4 for latch [0x10456D70]).
 * Branch polarity of the vertical-separation latch correction ([0x10456D78] read site).
 * Whether any non-`.text` writer touches actor+0x598 (none found; DAT/runtime not ruled out).
+
+---
+
+# K2 pass — 2026-10-09 (owner session, FFXiMain.dll retail-2026-09, TDS 0x6A995428)
+
+## K6. Locomotion request, blend and in-step laws **[V bytes]**
+
+* The gait is requested again only on a **name change or a finished one-shot** (0xC83C0).
+* Blend = **16 ticks** (0xC85F8..0xC8613); the new clip then starts **in step** (0xC861B..0xC8640) —
+  kuluu landed this as `e8b7af3` (patch 5). In-step formula (0x1AE01..0x1AF18):
+
+  ```
+  offset = R_b × wrap( (outgoing_keys + R_b × 8 × speed) × B/A )   where A = N_a/R_a, B = N_b/R_b
+  ```
+
+* Only slots that **have** the named clip get it; first one found wins (0xCD540). When slot 0 is
+  requested, finished one-shots in slots 0..2 that the request leaves out are cleared
+  (0xCDCC5..0xCDD13). Special cases: jmp block 0xCD740..0xCD8C3; waist-slot skip 0xCD5E8..0xCD620.
+
+## K7. Camera input device laws **[V bytes]**
+
+* **Stick & mouse** (device-0x3F actions 6/7, read at 0x123970) turn and tilt the camera **locked or
+  not**; action flags 0x8B / 0x8C invert them.
+* **Camera keys** (device-0x3F actions 0xA9/0xAA, read at 0x25E100/0x25E170) count only with
+  **free-run ON** (gate 0x1EFC8) and flags `[0x10487F81]`/`[0x10456DB0]` clear — i.e. locked: the
+  keys do nothing, not even tilt (kuluu patch `e28fbdf`).
+* Turn = ticks × input × **0.0279** (.rdata 0x32A3EC); while locked scaled by **6 / eye distance**
+  (0x32A3E8 = 6.0). Tilt = ticks × input × **0.1067** (0x32A3E4), added straight to the eye height.
+* Zoom keys (device-0x3F actions 0x4F/0x50): focal ±**6 per tick**, clamped **[242, 900]**; holding
+  **both** eases back to **350 at 0.25/tick** (0x1F76E..0x1F8B1).
+
+## K8. Lock handlers and the locked-camera cone law — the L/R opening, formalized **[V bytes]**
+
+* Handler table **0x578770**. Lock key = device-0x3E action 0x30 → id **0** normal lock (0xC5440),
+  id **1** release (0xC5410); id **4** is a second lock type (0xC54C0). Every handler does exactly
+  three things — free-run off (`vt+0x334`); read the target's camera-point height **once**
+  (`vt+0x3F8`, body 0xD6670); set `[0x10456DAC] = 0` (id 4: **5.0**) — and **none moves the eye**.
+* The locked branch is taken whenever free-run is off (**0x1F60B**). Look point = half-and-half blend
+  of the player's ref-13 height and the target's camera-point height; follows at **0.25/tick**
+  (0x1F44B..0x1F5F6).
+* Eye law **0x201E6..0x20773**:
+  * angle = acos of the normalised (eye − look) against (player − target);
+  * cone half-angle = **atan(4 / (near + span))**, with
+    near = (7.2 + span/8 + reach) × focal/1000, far = same with **8.6**; each band edge adds span/2;
+  * limit multiplier: **×1** normal lock · **×1.5** id 4 · **×3** special game mode (via 0x97D50:
+    state byte `[0x10485640] == 0x17`, or flag `[0x104DFD98]`);
+  * reach = 0 normal; id 4 adds **5 × target box size**, and in the special mode additionally
+    **1.5 × player box**;
+  * **only an eye past the limit moves**, turned onto the cone edge (0x20469..0x20505); inside stays
+    put (this is what makes the lock open off-side instead of swinging through behind);
+  * distance closes into the band at **0.25/tick** (0x2052B..0x2063F) — supersedes §K4's per-pass
+    percentages for the locked branch (§K4 springs stay as measured for their own loop path);
+  * wall ray starts **1.0 above the feet**; eye stops **0.2 short** of a hit (0x20651..0x20765).
+* Lateral-opening consequence: a lock from off the line settles **≈20° off it, measured from the
+  midpoint**; at 5 yalms ≈ **34° off your back**. kuluu: `a129728` cone framing + `2cddb36` "lock
+  opens to the nearer side, not behind" (pending owner playtest).
+
+## K3 addendum — pivot height cap, corrected reading **[V bytes]** (supersedes §K3's quantiser wording)
+
+Owner pass 2026-10-09 of **0x1F3A2..0x1F446**: the span is the skeleton box **capped at 2.5**, and
+the pivot sits **0.6 × span** above the feet — **1.14 yalms for a Hume male** (span ≈ 1.9). The
+earlier §K3 note "tested against 2.5, *forced to* 4.0 when not below" mis-describes the same
+comparison's polarity: it is a clamp on the span, not a floor jump to 4.0. kuluu landed this reading
+in patch-6 commit `27807b2` (`anchor_bias_y`: skeleton-span-first, retail cap). The old "forced 4.0"
+literal (imm 0x40200000 store at the §K3 site) remains observed; its role under the clamp reading is
+**[I]** — likely an out-of-band default slot, not the hume pivot.

@@ -394,3 +394,22 @@ local), so neither `carry` nor bind-fallback should be re-landed before that rea
 Tier: **[V] for every byte above**; "persists frame-to-frame" is the reading those bytes force rather than an
 independently observed initialisation. If anyone needs it nailed harder, the settling read is whoever allocates and seeds
 `[this+0x14]` — confirm entries are seeded from bind once at model load, not re-seeded per frame.
+
+## 4g. Motion queue, states, retire law and playhead — owner session pass 2026-10-09 **[V bytes]**
+
+Extends §4a/§4e (same bodies; no conflict found). `FFXiMain.dll retail-2026-09`, TDS **0x6A995428**.
+
+* **Queue depth:** a slot holds up to **3 motions**. The oldest is written straight and newer ones
+  merge over it at their own weight — chain **0x1B230 > 0x1AB60 > 0x19A50 > 0x19EE0 > 0x33220**
+  (§4e's ApplyPolicy body sits at 0x19A50; the merge tail is §4a's law).
+* **Merge (0x33220):** copies the incoming rotation when **t == 1**; otherwise takes the short way
+  round and keeps the raw weighted sum — **no normalise** (§4a landed).
+* **Motion states (0x1B5D0), four:** blending-in · steady · expiring · blending-in-while-expiring.
+* **Add (0x1AD00):** new motion starts at weight 0 and retires the previous newest over the *same*
+  blend (0x1B520). A **4th** motion drops the oldest immediately (0x1AF29..0x1AF51).
+* **Clock:** one tick = 1/60 s (0x14CF0). Playhead counts keys: advances by
+  **ticks × key-rate × 0.5 × speed** (0x1A8E0).
+* **Clip header fields:** `+0x32` joint count · `+0x34` key count · `+0x36` key rate · joints array
+  from `+0x3A`, stride **0x54** (§4c resolution unchanged: payload +2/+0x0A after the 0x30 object prefix).
+* **Bone mask:** a bone is written only with **bit 7 set and bit 6 clear** (0x19A50); slots sampled
+  **4 down to 0**.
