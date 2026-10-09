@@ -15,8 +15,13 @@ without new owner instruction. The §K3 anchor-bias port (`d5b7a73`) was put **H
 lock framing and leg-preserving side-step arcs; then on 2026-10-09 four more owner
 patches landed — `dc45d46` (crossfade from a still again at old gait blend lengths), `e28fbdf`
 (camera keys leave a locked camera alone; §K7), `2cddb36` (lock opens to the nearer side; §K8),
-`93145d9` (open menu no longer stomps view zoom). Status of 0006–0010: **awaiting owner playtest**.
-The §K3 quantiser wording itself was corrected by the same session — see K2-pass §K3 addendum.
+`93145d9` (open menu no longer stomps view zoom); then a second 2026-10-09 batch — `a975fe7`
+(restores the locked-torso steer that `f1bfd06` had deleted; its gate now keys on the restored
+side-step clips, so it runs on every locked A/D), `07fce67` (lock opening swing eases at a quarter
+per tick — §K8's settling law), `177e46d` (Q/E turn-in-place with camera catch; steer a run; leave a
+lock alone — §K7), `35a8b76` (locked S plays the back step, walking or running — §K2 bucket 3→`mvb`).
+Status of 0006–0014: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
+the same session — see K2-pass §K3 addendum.
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
 
@@ -69,8 +74,9 @@ Bucket → clip via §K1's chooser: 2→`mvr `, 3→`mvb `, 4→`mvl `.
 
 ⇒ sideways travel runs the **side-step clips while locked** (free-run off), with the two-frame
 straight-gait bridge on direct reversals. kuluu landed this law in commit `f1bfd06`
-(`ffxi-actor::SideStepFlipLatch` + chooser states); it also deleted kuluu's torso-reconciliation
-layers, which have no retail counterpart.
+(`ffxi-actor::SideStepFlipLatch` + chooser states). Its removal of kuluu's locked-torso steer was
+reinstated by owner patch `a975fe7` the next day — the two coexist: side-step clips plus the
+torso-steer-capped-by-the-authored-chest-record pass.
 
 ## K3. The following-camera resolves the lock itself — pivot bias from attach-record nodes **[V bytes / I which status picks]**
 
