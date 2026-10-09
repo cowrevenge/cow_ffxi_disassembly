@@ -30,7 +30,11 @@ locked_on sets out toward the target when the bare short way would swing a bone 
 (the L↔R changeover through the back); `c9b625f` refines §K6's keep-vs-drop split by selection class:
 an idle selection releases every slot it leaves out (so engaged standing drops the run's waist clip —
 no flapping lower-torso gear), while a travelling selection still keeps a left-out body slot running.
-Status of 0006–0018: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
+then `1139dbe`: engaged, the waist plays its own battle clip — `btl2` ships in the race's
+waist/cloth battle block (9928/9929/9930 for Hume M, beside the swings' waist parts at02/at12/at22),
+which was resolved but never loaded; load_pc now pulls that block's **waist-slot** clips into the
+engaged pool, and lowest-slot-owns means they move only what legs and upper body leave unkeyed.
+Status of 0006–0019: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
 the same session — see K2-pass §K3 addendum.
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
