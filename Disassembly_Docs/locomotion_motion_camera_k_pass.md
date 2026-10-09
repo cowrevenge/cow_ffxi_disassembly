@@ -25,7 +25,12 @@ side-step clips (per-frame torso steer over mvl/mvr = twisted run; a locked-only
 skipped 27807b2's held-arc law and produced the strafe bounce) — locked_torso keeps only the
 look-at focus measuring from where the chest faces, each bone inside its authored limit;
 `d44da62` completes the Q/E pairing (steering a run swings the camera the same turn at the same
-catch). Status of 0006–0016: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
+catch); `7c1ba1b` extends the held-arc law with a locked-gated pick: a locomotion crossfade while
+locked_on sets out toward the target when the bare short way would swing a bone behind both poses
+(the L↔R changeover through the back); `c9b625f` refines §K6's keep-vs-drop split by selection class:
+an idle selection releases every slot it leaves out (so engaged standing drops the run's waist clip —
+no flapping lower-torso gear), while a travelling selection still keeps a left-out body slot running.
+Status of 0006–0018: **awaiting owner playtest**. The §K3 quantiser wording itself was corrected by
 the same session — see K2-pass §K3 addendum.
 
 ## K1. The motion-name chooser 0xC8BB0..~0xC8E58 **[V(me)]**
