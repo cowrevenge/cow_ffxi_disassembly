@@ -93,6 +93,19 @@ dumps for the E pass), [event_opcode_table.md](Disassembly_Docs/event_opcode_tab
 [mob_evidence_1..3](Disassembly_Docs/mob_evidence_1_modmap_anchors.md) (F-pass evidence),
 [tpc_package_table.md](Disassembly_Docs/tpc_package_table.md).
 
+## Agent quick references (matching phase)
+
+Read these before any matching-decomp work. They are the standing rules for
+agents, including unattended runs.
+
+- [Matching methodology, triage loop and blocker classes](Disassembly_Docs/matching/matching_methodology.md)
+- [Source-credibility gate](Disassembly_Docs/matching/source_credibility.md)
+- [External type-information gate](Disassembly_Docs/matching/type_info_gate.md)
+- [Complexity gate (what unattended runs may pick up)](Disassembly_Docs/matching/complexity_gate.md)
+- [Original-bug policy](Disassembly_Docs/matching/original_bug_policy.md)
+- [Park ledger rules](Disassembly_Docs/matching/park_ledger.md) and [ledger](Disassembly_Docs/matching/park_ledger.csv)
+- [Infrastructure plan (phase 2 work list)](Disassembly_Docs/matching/infrastructure_plan.md)
+
 ## Tools
 
 Python scanners over the on-disk PE (decoded in memory).
