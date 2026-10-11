@@ -53,6 +53,16 @@ FOLDER MAP
                            + census/ (cs-census.txt, cs-vm-census.txt) + opcode coverage
                            (cs-opcode-coverage.md is the single survivor; it absorbed and
                            replaced cs-opcode-round13.md in the 2026-10-08 triage)
+    matching/              byte-matching phase standing rules (read before any
+                           matching-decomp task, including unattended runs): what counts as
+                           exact, the per-function triage order and blocker classes A-F,
+                           the source-credibility gate, the external type-info gate (byte
+                           re-read required for every field/enum/signature), the complexity
+                           gate for self-assigned work, the original-bug policy
+                           (FFXI_FIX_BUGS), and park_ledger rules + its empty template.
+                           infrastructure_plan.md is the unbuilt tooling work list: until
+                           the exact compiler is pinned there, nothing may be marked exact.
+                           Added 2026-10-11; linked from README.md too.
 
   Disassembly_Tools/     the canonical analysis suite (run from THIS folder)
     common.py              core: PE+POL1 decode, byte scans, cached whole-image sweep
