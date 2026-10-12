@@ -85,7 +85,7 @@ Two builds were dissected (RVAs are **build-specific**):
 | D | [docs/drivetask.md](Disassembly_Docs/drivetask.md) | The **DriveTask** overlay layer (`CMoLockLookAtDriveTask`, `CMoActorRotationDriveTask`): how an actor is *driven* to look/turn, plus the `dancer` module map and Square's class-descriptor format |
 | E | [docs/event_vm.md](Disassembly_Docs/event_vm.md) | The cutscene event VM (opcodes, waits, camera/UI interplay) |
 | U | [docs/ui.md](Disassembly_Docs/ui.md) | Event UI/HUD and dialog control |
-
+| **B** | [docs/weapon_engage.md](Disassembly_Docs/weapon_engage.md) | The **weapon state / engage-draw machine**: per-hand engaged + override bytes on the actor and their vtable slots; the engage step (its busy gate sits on ActionTimer1); weapon re-parenting to standard positions 0x7E/0x7F in the skeleton update; which battle motion blocks get loaded; the `in `/`out` routine-name builders |
 | — | [docs/dancer_engine.md](Disassembly_Docs/dancer_engine.md) | **External ingest** (tier `[web]`): WGINC/DancingMad @ 4243c7e — the `dancer` module census, class map and pose/skinning leads, each tagged with whether we verified it in our build; plus our oracle list (PS2 DWARF etc.) |
 
 Supporting material: [event_evidence.md](Disassembly_Docs/event_evidence.md) (raw evidence

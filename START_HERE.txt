@@ -11,6 +11,12 @@ FOLDER MAP
 
   General_Docs/          non-DLL working docs
     tools_inventory.md     tool inventory (paths inside are pre-reorg; banner on top)
+    kuluu_verify_skill/    COPY of the engine's verify skill, kept here at the owner's request 2026-10-12:
+                           SKILL.md + references/{drive-headless.md, drive-gui.md, stack.md}. Canonical remains
+                           the engine tree (C:\Cow_Kuluu_ffxi-engine\.agents\skills\verify\) — treat this as a
+                           snapshot and re-sync FROM there, never back. Its drive-headless.md is the recovered
+                           541-line version; that file's §Reconcile notes carry two still-unresolved
+                           capture-path conflicts (cap-window.ps1 vs in-app readback on a hidden window).
 
   General_Tools/         tooling NOT tied to DLL analysis
     texdat/                DAT<->PNG texture converter suite (texfmt.py, dat/png_to_*)
@@ -43,6 +49,11 @@ FOLDER MAP
     event_opcode_table.md  opcode coverage table
     mob_evidence_1..3.md   F-pass evidence trail
     tpc_package_table.md   TPC package layout
+    weapon_engage.md       B pass — weapon state + the engage/draw machine: engaged/override bytes per hand and
+                           their vtable slots, the engage step (busy gate on ActionTimer1), re-parenting to
+                           standard positions 0x7E/0x7F, motion-block selection, in /out id builders. Its last
+                           section records what this pass could NOT re-read (the DAT-only facts) — read that
+                           before repeating any of those numbers
     ffxi_string_tables.md  d_msg string-table formats (see semantic_resolver)
     g144-crit-flash.md     the muted hit3 flash in the hi14 crit chain (DAT values)
     Party_frame.md         solo/party UI coding & loading

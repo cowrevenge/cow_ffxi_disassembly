@@ -230,6 +230,13 @@ accumulates into the start tick; 60 ticks/s (F46, F54, F57). Ops seen in mob rou
 | 0x5E | knockback | |
 | 0x5F | StopRoutine(name) | dig stops `init`, pop stops `ini1` |
 | 0x74 / 0x78 / 0x85 | disintegrate / display dead / kill | |
+| **0x84** **[V] B pass 2026-10-12, TDS 0x6A995428** | run one hand's draw/sheathe routine as a child | handler **0x5AA93**. The four candidate names are built on the stack at 0x5AA96..0x5AAB0 as packed dwords `in10` (`0x30316e69`), `ot10` (`0x3031746f`), `in20` (`0x30326e69`), `ot20` (`0x3032746f`) and chosen by a two-bit index at 0x5AAE3..0x5AAED (`movsx/add/or/test` then `mov edi, dword ptr [esp+eax*4+0x3c]`). The name's last character is that hand's model **Info byte 0x04** (main via **0x5E2B0** = `[ecx+4]`, sub via **0x5E2C0** = `[ecx+7]`), with negatives forced to 0 at 0x5AB08..0x5AB0C; the routine is looked up on the actor (`call 0xCE480` at 0x5AB26) and run as a child (`jmp 0x5A90C` at 0x5AB5E). See [weapon_engage.md](weapon_engage.md) §3 for the same byte's other uses |
+| **0x9B** **[V] B pass** | hold one hand for the stage's duration | handler **0x5C647**; task size `push 0x7c`; ctor **0x61E00** raises that hand's override through `call dword ptr [reg+0x324]`, dtor **0x61DB0** drops it (same slot) |
+| **0xA7 / 0xA8** **[V] B pass** | raise / drop that hand override immediately, not tied to a stage | handlers **0x5C697** / **0x5C6D0** |
+
+The hand operand for all four is the dword after delay/duration. Values ≥ 2 fold to hand 0 (main) by
+`cmp reg,2` + `jl` + `xor reg,reg`, at 0x5C6AC..0x5C6B4 and 0x5C6E5..0x5C6ED **[V]**; whether anything above 1 is
+ever rejected outright was not established (the selection is two-bit, so only hands 0/1 are reachable).
 
 Full ~85-op list: xim `EffectRoutineParser.kt` (F57). Scheduler chunk layout on disk: +0x24 u32 =
 first stage offset (0x50), +0x28 body length, +0x2C count; a type-0 header ends the stream (F54).

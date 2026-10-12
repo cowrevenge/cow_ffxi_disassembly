@@ -11,3 +11,8 @@ Extracted_Dats/
 General_Tools/ashita_module_examples/xiui/
 General_Tools/ashita_module_examples/bovineFH/
 General_Tools/ashita_module_examples/bovineBattle/
+
+# Unpacked / generated artifact material — all of it is reproducible from the vendored zip via its
+# own unpack.py, and FFXiMain.unpacked.dll alone is ~12 MB. Keep only the zip tracked.
+Disassembly_Tools/artifacts/*
+!Disassembly_Tools/artifacts/ffximain_tables_v0.zip
