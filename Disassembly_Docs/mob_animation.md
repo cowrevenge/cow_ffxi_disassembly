@@ -53,8 +53,37 @@ through 0xCE490, which walks the actor's loaded resource list (model DAT, then s
 as ROM/0/0.DAT, then nothing) (F44, F55, E7). A hit copies the routine's stage stream (type byte +
 length-in-dwords byte per stage) into scheduler nodes hung off actor +0x68/+0x6C; the first node
 of a motion routine carries the clip fourcc at +0x3C and its frame count at +0x40 (F20, F46).
-Locks are the 0x07/0x59 AnimationLock stages, counted in ActionTimer1 (a refcount) with ActionTimer2
-= 1800 countdown stamped by @0xA4150 (F34, F49, F55, F57). A miss is a silent no-op (E7, F58).
+Locks are the 0x07/0x59 AnimationLock stages. **[V] re-read 2026-10-12 against `FFXiMain.unpacked.dll`, TDS
+0x6A995428 — CORRECTED: this paragraph said the locks are "counted in ActionTimer1 (a refcount) … stamped by
+@0xA4150". There are TWO counters, and only one of them is ActionTimer1.**
+
+- **actor +0x80 dword** = the lock refcount. Raised by actor vtable slot **+0x160** = 0x832D0 (`inc dword ptr [ecx+0x80]`),
+  released by slot **+0x164** = 0x832E0 (read, `test`, dec-if-nonzero). Both slots hold the same pair in every actor vtable
+  checked — family base 0x32CFE0 and the PC actor table 0x32D710.
+- **ActionTimer1 = entity +0x11C word**, stamped at **+0x11E** with 0x708 (=1800). Raise **0xA4140** (`inc word ptr
+  [ecx+0x11c]; mov word ptr [ecx+0x11e],0x708`); release **0xA4160** (dec, re-read the word, `test`, re-stamp 0x708, and at
+  0xA417C clamp the counter back to 0 when it went negative). Reached from actor-shaped objects through thunks that load the
+  entity back-pointer `[obj+0x70]` first and no-op when it is null: raise **0x83300** (tail-jmp to 0xA4140), release
+  **0x83310**, read **0x83320** (`movsx eax, word ptr [entity+0x11c]`; `xor eax,eax` on the null path).
+
+Which stage touches which counter — opcode → handler through the jump table at **0x5DC1C**, indexed `case = byte − 2`
+(all six entries below re-read from that table and matching):
+
+| stage | handler | task | what it raises |
+|---|---|---|---|
+| **0x07** | 0x5A280 | 0x7C, ctor **0x607E0** | vt+0x160 only — **not** ActionTimer1 (no call to 0x83300 in the ctor) |
+| **0x08** | 0x5A2CD | 0x7C, same family | as 0x07 |
+| **0x59** | 0x5C907 | 0x78, ctor **0x62650** | the ActionTimer1 thunk 0x83300 **and** vt+0x160 |
+| **0x1F / 0x20 / 0x56** | 0x5A31A / 0x5A367 / 0x5A3B4 | 0x78, ctor **0x601F0** | ActionTimer1 only (0x83300; no vt+0x160 use in that ctor); dtor **0x602D0** → 0x83310 |
+
+So **actor +0x80 is the 0x07/0x08/0x59 lock refcount, and ActionTimer1 is raised by 0x1F/0x20/0x56/0x59.** The 0x1F-family
+duration counts down on the routine clock at **0x602A0**: a float deadline at task **+0x74** is decremented against the
+global clock `[0x47bfa8]+0xeb0`, and when it expires the task fires `vt+0x18(1)` and returns 1.
+Not re-read this pass (so untagged): which actor each handler acts on — own / target / every actor in the record's list —
+came from the dig's reading of those handlers. And the F-pass live rows below, where +0x80 *and* ActionTimer1 both went to
+1 together, are consistent only if those routines carried 0x1F or 0x59 beside the 0x07; that `dat_routines.py` check over
+the worm DAT was not re-run this session, so it stays open rather than asserted.
+A miss is a silent no-op (E7, F58).
 
 **Combat.** 0x28 `cmd_arg` (bit 86) is a FourCC routine name: `atk0` for melee (categories 1, 2 ->
 `SetAttack`), `cate` for ability starts (7, 8, 9, 10, 12) (F50, F56). `atk0` calls the client
@@ -93,7 +122,7 @@ implements, and their stage contents.
 | 0x8C490 / 0x95EA0 | raw-state machine on [ent+0x170] (fsh0-3, init+inte, wep0-8, default sub block) / tick SM that arms `hen0` | F37 |
 | 0xCE490 | fourcc -> routine entry resolver (walks loaded resource list, `init` special-cased) | F44 |
 | 0xCE241 / 0xCE59D / 0xCE790 | init -> ini0 rewrite resolvers (slot +0x1DC predicate, then slot +0x400); 0xCE790's callers ~0xD6B6B-0xD6C84 form the state -> fourcc switch (`ls05`, built `i/b/n/w` names) | F29 |
-| 0xA4150 | ActionTimer setter: `inc word [ecx+0x11C]; mov word [ecx+0x11E],0x708`; 5 callers | F34 |
+| **0xA4140** | ActionTimer1 raise: `inc word ptr [ecx+0x11c]; mov word ptr [ecx+0x11e],0x708`. F34 recorded this at 0xA4150, and that address is how the older build 0x6A7297F5 laid out; **in this build (TDS 0x6A995428) 0xA4150 is this function's own `ret`** — re-read 2026-10-12. Release = 0xA4160; actor-side thunks 0x83300 / 0x83310 / 0x83320 through `[obj+0x70]` | F34 → re-read 2026-10-12 |
 | 0xCF070 / 0xCF0C0 / 0xCEF10 | post-init hook family: `!kl1-3`, `!in?` -> candidates @0x330F28 `!in1-3` | F45 |
 | 0xD60D0 / 0xD60F0 | `wep0..wep8` name builder; `!f01/!f02` gated on actor+0x840 bit 13 | F37, F45 |
 | 0x35F634 / 0x3515BC | class-name strings `CXiSkeletonActor` / `CYyObject` (.data) | F26 |
@@ -127,7 +156,7 @@ implements, and their stage contents.
 | actor +0x68 / +0x6C | scheduler node list head / tail (0 when idle) | F9, F15 |
 | actor +0x70 | back-pointer to XiAtelBuff | F15 |
 | actor +0x78 | colour word (0x80808080 fresh, 0xC0808061 idle, 0xC0804141 engaged) | F15, F49 |
-| actor +0x80 / +0x84 / +0x88 | routine playing (0/1) / ActType (2 burrow; 4->2->3->0xD in combat) / 6 idle -> 2 | F15, F49 |
+| actor +0x80 / +0x84 / +0x88 | **[V] corrected 2026-10-12**: +0x80 is *not* "routine playing (0/1)" — it is a **dword lock refcount** raised by vt+0x160 (0x832D0 `inc dword ptr [ecx+0x80]`) and released by vt+0x164 (0x832E0, dec-if-nonzero), i.e. the 0x07/0x08/0x59 AnimationLock counter; it reads 0/1 in a single-lock dig, which is how it was misread. / ActType (2 burrow; 4->2->3->0xD in combat) / 6 idle -> 2 | F15, F49 → re-read 2026-10-12 |
 | actor +0x7D8 | current fourcc; 0x20202020 (spaces) = none | F32, F37 |
 | actor +0x840 | flag byte: bit 7 `!in?/!kl?` latch, bit 13 `!f0?` | F45 |
 | actor +0x878 .. | CIB (0x45 info chunk) copy; +0x881 = waist_type (Tpc B flag) | E17 |
@@ -184,10 +213,10 @@ accumulates into the start tick; 60 ticks/s (F46, F54, F57). Ops seen in mob rou
 | 0x02 | fire VFX generator | +8 instance fourcc, +0xC generator object ptr (runtime) |
 | 0x03 | call routine on source | +8 name, +4 start frame |
 | 0x05 | skeleton animation | +8 clip fourcc, 2 f32, transIn/transOut u16, maxLoop |
-| 0x07 / 0x59 | AnimationLock (`BondageActor` / `LockCasterMagic`) | duration = the ActionTimer1 lock |
+| 0x07 / 0x59 | AnimationLock (`BondageActor` / `LockCasterMagic`) | **[V] corrected 2026-10-12**: not "the ActionTimer1 lock" — 0x07 counts on **actor +0x80** only; 0x59 raises **both** actor +0x80 and ActionTimer1 (entity +0x11C). See §2's counter table for the ctors |
 | 0x09 | call routine on target | `lhit chit` |
 | 0x0A / 0x0B / 0x4A / 0x53 / 0x60 | sound variants | +8 = 4 ASCII digits (global se file) or a 0x3D chunk name in the same DAT |
-| 0x1F / 0x20 | LockActorStatus | |
+| 0x1F / 0x20 | LockActorStatus | **[V] 2026-10-12**: ActionTimer1 (entity +0x11C) only, via thunk 0x83300; duration runs on the routine clock (0x602A0, task +0x74); release in dtor 0x602D0. **0x56** (handler 0x5A3B4) is this row's third sibling |
 | 0x21 / 0x25 | flinch source / target | |
 | 0x24 | suspend on result | |
 | 0x28 | transition to idle | |

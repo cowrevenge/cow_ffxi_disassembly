@@ -210,9 +210,19 @@ present.
    `engage_locks_target_system` moves the camera lock).
 5. **Sub persistence**: does the sub survive the menu closing (slots "always
    exist"), or clear on Esc?
-6. **Weapon draw sub-type**: retail's draw routine is
-   `"in <weaponAnimationSubType>"` (xim `Actor.kt:832`); we hardcode
-   `in 0`/`out0`. Is the sub ever non-zero in retail, and for which weapons?
+6. **Weapon draw sub-type — ANSWERED 2026-10-12 (B pass).** The id is built at runtime from the
+   actor's own weapon-info copy, not hard-coded:
+   - `0xD2ED0` → `"in " + digit`: `movsx eax, byte ptr [ecx+0x87c]`; if negative `xor eax,eax` (an
+     unset/absent sub reads 0); `add eax,0x30` (ASCII); `shl eax,0x18`; `or eax,0x206e69` — the packed
+     fourcc `'i','n',' ',digit`. **[V]**
+   - `0xD2EF0` → `"out" + digit`: same digit path, `or eax,0x74756f` (`'o','u','t'`). **[V]**
+   Both read the **same byte**, actor+**0x87C**, which is the copy of the *main* hand's model Info byte
+   0x04 (written at model load, `0xD0C76`: `mov byte ptr [esi+0x87c], dl`) **[V]**; the routine-stage path
+   reaches the same value through `0x5E2B0` (`mov al,[ecx+4]`, main) and `0x5E2C0` (`mov al,[ecx+7]`, sub),
+   each with its own negative→0 clamp at `0x5AB08..0x5AB0C` **[V]**.
+   So retail's name really is `"in " + <main-hand Info 0x04, as a digit>` — hard-coding `in 0`/`out0` is
+   right only for weapons whose Info byte 0x04 *is* 0. **Still open (C4):** which weapon models actually
+   carry sub-type 1; that needs a DAT census and was not done this pass.
 7. **Rejection spam**: does the server re-send the rejection message every
    swing tick while the condition persists (facing kept away / out of range)?
    If so, does retail debounce the display?

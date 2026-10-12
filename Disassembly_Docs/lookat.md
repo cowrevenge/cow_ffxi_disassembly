@@ -899,7 +899,7 @@ compose the bend onto the bone's own node orientation as §E.9 records. Swapping
 frame would be a second guess stacked on the first: these numbers say which axis is which for a bind-pose bone
 with no clip applied, and they are not retail's basis.
 
-### E.11 — the clamp law transcribed end to end; two recorded branch conditions corrected (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428) **[V(me)] [measured]**
+### E.11 — the clamp law transcribed end to end; two recorded branch conditions corrected (pass of 2026-10-05 against `FFXiMain.unpacked.dll`, TDS 0x6A995428; not-clamped exit re-read 2026-10-12 in the same build) **[V(me)] [measured]**
 
 E.5 left the clamp as an `[esp+N]` sketch, and two conditions recorded there (and carried into §E.6/E.7) are inverted with respect to the bytes. kuluu shipped from them; the play-test symptom was `a target to the side produces a downward look`. This pass read `0x2B140` instruction by instruction — and, because every branch here turns on an x87 condition mask whose meaning had been *asserted* rather than measured across several earlier passes, measured what those masks mean first.
 
@@ -945,7 +945,32 @@ What that fixes for masks this file leans on — with `PF` read the way `JP` rea
                                  was which and wrong only about which vector components fed them (§E.10). ***
 0x2b2a0..0x2b2ae                 ; r = fsqrt(u²+w²); fcomp st(3) (the radius the arm left on the stack) /
                                  ; and eax,0x4100 / jne 0x2b33f → inside-or-on takes the not-clamped exit
-     not clamped : 0x2b33f..0x2b371   drop the projections; copy3 (0x26eb0) of v into out; force [out+0xc] = 1.0f; return 0
+     not clamped : 0x2b33f..0x2b371   drop the projections; copy3 (0x26eb0) copies **the caller's own point** into
+                                    out — NOT v; force [out+0xc] = 1.0f at 0x2b35c (`mov dword ptr [esi+0xc],0x3f800000`);
+                                    return 0 at 0x2b368 (`xor al,al` after `call 0x279a0`).
+                                    *** CORRECTED 2026-10-12 — this line read "copy3 of v into out". It is not v. Re-read
+                                    bytes: the source register is loaded at **0x2b1ac** (`mov esi,[esp+0x90]`) and carried to
+                                    the copy; the two operands are pushed point-then-out (**0x2b343** `push esi` = src,
+                                    **0x2b34d** `push esi` = dst, dst loaded at 0x2b344 from `[esp+0x8c]`), and copy3's body
+                                    (`0x26eb0`) reads **dst=[esp+4], src=[esp+8]** — so the src really is the register carried
+                                    from 0x2b1ac. Nothing in this function stores to `[esp+0x90]`, `[esp+0x8c]` or
+                                    `[esp+0x88]`: all 359 instructions of 0x2ae96..0x2b380 were searched and there are zero
+                                    such stores, so the value cannot be locally computed here. The projections u/w/r are
+                                    stack temporaries and the `fstp st(0)` pair at **0x2b33f/0x2b341** discards them on this
+                                    path — the projection only *measures* (radius compare 0x2b2a0..0x2b2ae, flag test
+                                    `and eax,0x4100` + `jne`). One further write to esi exists at **0x2b2bf**
+                                    (`mov esi,[esp+0x88]`) but only down the clamped fall-through, after the branch was
+                                    already taken, so it is not this exit.
+                                    Misread effect: every up/down aim inside the rim lifts by the record's aspect and drops
+                                    by it again at the rim (PC rigs: head record aspect 1.5, chest 2.7).
+                                    Landed in kuluu as `ffxi-actor/src/look_bend.rs` (PR #1025 "the look-at clamp hands back
+                                    the point it was given"), tests `a_point_inside_an_uneven_ellipse_comes_back_as_it_went_in`
+                                    and `the_clamp_never_jumps_at_its_rim`; the superseded landing test used an even ellipse
+                                    (stretch 1), which is why it passed against the wrong reading.
+                                    Caveat on this re-read: which *incoming parameter* [esp+0x90] / [esp+0x8c] are was not
+                                    resolved to arg numbering — the linear sweep's frame tracking does not reset across this
+                                    span, so espmap output there is unreliable. What carries the correction is store-absence,
+                                    not arg identity. ***
      on the rim  : 0x2b2bb fxch st(1); 0x2b2bd fpatan   ; bearing from (w,u): cos picks up u's sign, sin w's
                       0x2b2c8 fcos × radius → [esp+0xc], [out]      ; xlim-or-ylim arm value
                       0x2b2d2 fsin × radius → [esp+0x10], [out+4]
