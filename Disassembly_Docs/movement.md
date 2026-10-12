@@ -3015,6 +3015,13 @@ is in [target_track.md](target_track.md) §6.
 
   underflow; stream-order decode in M18's correction.
 
+- **C1 — locked A↔D flip: what does retail actually do?** **[open, B pass 2026-10-12]** The merge at
+  **0x33220** is short-way *per bone* (dancer_engine §4a-bis), and on Mithra's clips the short way from `mvl`
+  to `mvr` crosses her back — i.e. it produces the flip that reads wrong in-game. Owner observation **[O]**:
+  retail turns *through* the target instead. Settling read (not done this pass): whether retail keeps a blend
+  space rather than merging, or latches on straight-gait frames before crossing, or merges with a different
+  rule; candidate anchors are the merge itself (0x33220) plus whatever chooses which clip pair feeds it during
+  a locked turn.
 - Physical identity of the zoom keys 0x4F/0x50 (device 0x3F): the key-ID→key mapping table is not yet extracted (user observation: U/D arrows [O]).
 
 - Fn 0x20446 (countdown = 20.0 @0x20769) reachability — open [I], settling read

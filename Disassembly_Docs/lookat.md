@@ -1261,3 +1261,37 @@ way the next step is the same: locate the head joint, then pull its numbers.
 
 
 HISTORICAL NOTE: the research-only rule of that pass is retired — kuluu edits now proceed row-by-row per Shane's standing orders (2026-10-05). Citation form for those edits stays `FFXiMain.dll retail-2026-09 RVA 0x...`.
+
+---
+
+## G. Open items carried in by the B pass (2026-10-12, against `FFXiMain.unpacked.dll`, TDS 0x6A995428)
+
+### G1 — standing look-at lands ~2× past the point: what the §E transcription misses inside `0x2AC60` **[open]** *(brief item C2)*
+
+Symptom **[O]** (owner's engine-side measurement, quoted so the vault owns it): with the §E bend as
+transcribed — each record turned its *full* clamp from the actor's forward against **one pre-bend frame**,
+neck stacked on chest — the head lands about twice past the point; a Mithra measured
+**19.8 / 37.1 / 43.1°** for look points at **10 / 20 / 30°**.
+
+Re-read this pass, all **[V]** unless tagged:
+
+- The bend at `0x2AC60` is **one function body spanning 0x2AC60..0x2B13E**: prologue `sub esp,0x110` +
+  pushes at 0x2AC60..0x2AC70, epilogue `pop edi/esi/ebp/ebx; add esp,0x110; ret 0xC` at 0x2B131..0x2B13B,
+  and **no `retn` anywhere between** — the body is far longer than what §E's transcription covers.
+- Call sequence through the first stretch, in order (call-site RVA → target): `0x2A750` at **0x2AC84**,
+  `0x2A750` again at **0x2AC92**, `0x270A0` at **0x2ACC3**, then
+  **`0x274B0` ×4** — **0x2ACCD / 0x2AD11 / 0x2AD4D / 0x2AD8E** — interleaved with `0x27120` (×2,
+  0x2ACE9/0x2AD40), `0x27530` (0x2ACFE), **copy3 `0x26EB0` ×2** (**0x2AD23 / 0x2ADBD**), `0x14CF0`
+  (0x2AD55), `0x276A0` (0x2AD84), then `0x272B0` (0x2ADCC) and `0x26F20` (0x2ADDE).
+- The tail after 0x2AE9E is a **record pipeline**, not epilogue wind-down: pair-loops over stack arrays
+  (`mov ebx,2`; 0x2AEB5..0x2AEC5 and 0x2AED1..), calls to `0x35270` / `0x35390`, a joint resolve through
+  **`0x2A9B0` at 0x2AFF5** (the same resolver the B pass recorded for weapon re-parenting —
+  [weapon_engage.md](weapon_engage.md) §2.3), a stride-**0x40** record copy (`shl esi,6`; `mov ecx,0x10`;
+  `rep movsd` at 0x2B009..0x2B018), further calls (0x33360 / 0x32E10 / 0x32FE0 / 0x28290 / 0x32A70 …) —
+  and the **ellipse clamp itself, `call 0x2B140` at 0x2AF1B**, re-confirming §E.2's "exactly one call
+  site (inside the bend)".
+- **[I]** So each record's direction is transformed → clamped → copied *multiple times inside one pass*;
+  §E's single-pre-bend-frame reading cannot say **which buffer feeds which of those calls**, which is
+  exactly how a per-record rotation ends up doubled (neck bending an already-bent chest). Settling read
+  (not done this pass): walk the pass order record by record — trace what each `0x274B0`/clamp call reads
+  and where its result is written back.

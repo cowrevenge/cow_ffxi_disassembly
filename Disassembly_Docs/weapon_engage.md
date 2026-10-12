@@ -32,8 +32,8 @@ Step routine **0x8B460**. `this` = entity (held in `esi`); the actor is `[ent+0x
 | Engaged dropped as the sheathe routine starts | **0x8B98C** actor load; pushes `(ebp, ebp)` = (0, 0); **0x8B9A6** `call dword ptr [edx+0x31c]` | paired with the clear below |
 | Current-fourcc cleared | **0x8B994** `mov dword ptr [ecx+0x7d8], 0x20202020` (`"    "`) | actor+0x7D8 = current fourcc, spaces = none (F32/F37) — re-confirmed here as part of the sheathe start |
 
-Not re-read this pass: which of the 6/7 types takes which branch inside 0x8B460..0x8C39F, and who calls
-this step with a non-zero argument (which skips the busy gate) — see §5.
+Not re-read this pass: which of the 6/7 types takes which branch inside 0x8B460..0x8C39F. The caller census
+for who invokes this step with a non-zero argument (which skips the busy gate) was done in-pass — see §5 C3.
 
 ---
 
@@ -132,12 +132,33 @@ built from `in10/ot10/in20/ot20`), **0x9B** (hold a hand for the stage's duratio
 
 *(added by this pass — see also C1/C2 carried in the other docs)*
 
-- **C3 — who calls the engage step 0x8B460 with a non-zero arg?** That argument skips the busy gate at
-  0x8B4AC, so a caller can force an engage step while ActionTimer1 is still held. Un-censused: needs an
-  xref census over the step's callers plus what each passes. `python xref.py artifacts/FFXiMain.unpacked.dll --to 0x8B460`
+- **C3 — who calls the engage step 0x8B460 with a non-zero arg? NARROWED in-pass 2026-10-12, same build.**
+  Direct-call census (`python xref.py artifacts/FFXiMain.unpacked.dll --to 0x8B460`) finds **exactly three**
+  call sites: **0x8EB40**, **0x8EC68**, **0x8FDC3**. **[V]** (the sweep's "func 0x8B3DD" label is a
+  padding artifact above the step — 0x8B460 has its own prologue, `sub esp,0x88` + four pushes; arg¹ is read
+  at **0x8B49B** `mov eax,[esp+0x9c]`, exits via `ret 4`; the skip-past-AT1 branch re-confirms §1's busy gate.)
+  - **Sites 1 & 2 (0x8EB40, 0x8EC68)** both push **ebx**, and ebx is loaded exactly once at **0x8EB37**
+    (`mov bl, byte ptr [ecx+0x100]`, ecx = actor); a scan of the range between shows no other ebx
+    reference — the flag survives to both calls. **[V]** The flag byte `actor+0x100` and its companion
+    bit `actor+0x88 & 0x20` are written immediately above on two branches: **[V]**
+    - **arg = 0 path** (block entry 0x8EB14): `[actor+0x100] = 0`, `actor+0x88 &= ~0x20` (byte-AND `0xDF`
+      at 0x8EB27) — taken when `[ent+0x1D2] & 4 == 0` or byte `[ent+0x1FF] ∈ {8,9}`.
+    - **arg = 1 path** (0x8EAFE `mov byte ptr [eax+0x100],1`; 0x8EB0B `or dword ptr [eax+0x88],0x20`),
+      joining the block at 0x8EB2F where ebx picks the value up — taken when `[ent+0x1D2] & 4 != 0`
+      **and** byte `[ent+0x1FF] ∉ {8,9}`.
+    So the same code that engages the `actor+0x100` / `actor+0x88|0x20` flag pair is what forces the step
+    past the ActionTimer1 gate. **[V]** for the wiring; what those flags *mean* (and why states 8/9 at
+    `ent+0x1FF` suppress forcing) stays open.
+  - **Site 3 (0x8FDC3)**: a call with **no argument pushed** — the callee reads its arg¹ slot straight off
+    the enclosing scope's stack, so non-zeroness there is inherited, not chosen at this site **[V]**;
+    after it returns, `jmp 0x905D4` follows. What the enclosing scope keeps in that slot: unread.
+  - All three sites sit in jump-fed blocks of one giant entity-state region — each containing block reports
+    zero direct callers in the sweep, so "who asks for a gate-skipping step" resolves to the enclosing
+    routine's entry points (not located this pass).
+    Remaining C3: locate that region's entries and read `ent+0x1D2/0x1FF` semantics.
 - **C4 — which weapon models carry Info byte 0x04 = 1?** Decides who draws with anything but `in 0`/`out0`.
-  Needs a DAT census over weapon model Info chunks (see §3.1 of this doc for the field), and it is blocked on
-  the DAT-access note below.
+  Needs a DAT census over weapon model Info chunks (the field's load sites are in §2.1 of this doc; the id
+  builders that consume it are in §3), and it is blocked on the DAT-access note in §6.
 
 ## 6. What this pass could NOT re-read, so nothing about them is claimed here **[OBS]**
 
